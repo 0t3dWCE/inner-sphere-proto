@@ -54,7 +54,10 @@
 <body>
   <div id="hud"></div>
   <div id="settings">
-    <div class="title"><span>Параметры</span><button id="reset" type="button">Сброс</button></div>
+    <div class="title">
+      <span>Параметры</span>
+      <span><button id="clearFow" type="button" title="Забыть разведанное">Туман ↺</button> <button id="reset" type="button">Сброс</button></span>
+    </div>
     <form id="params" autocomplete="off"></form>
     <div class="hint">Esc — отпустить мышь, чтобы редактировать. Значения сохраняются в браузере.</div>
   </div>
@@ -81,8 +84,14 @@
       ['GRAVITY',    'Гравитация (к стенке)', 0.1,    100,  0.5],
       ['MOUSE_SENS', 'Чувствительность мыши', 0.0005, 0.01, 0.0005],
       ['THROW_SPEED', 'Скорость броска',      5,      300,  5],
+      ['FOW',        'Туман войны (0/1)',     0,      1,    1],
+      ['FOW_R',      'Радиус видимости (×R)', 0.1,    1.5,  0.05],
+      ['FOW_MEMORY', 'Яркость разведанного',  0,      1,    0.05],
     ];
-    const DEFAULTS = { R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45 };
+    const DEFAULTS = {
+      R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45,
+      FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35,
+    };
     const STORAGE_KEY = 'inner-sphere-params';
 
     function loadParams() {
@@ -108,6 +117,113 @@
     scene.fog = new THREE.Fog(0xa9c7e0, 1, 2);
 
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 100);
+
+    // ---------- туман войны ----------
+    // Видим только "пузырь" радиусом FOW_R·R (по дуге сферы) вокруг игрока. Всё, что дальше, тонет в тумане.
+    // Пройденные места запоминаются в карте разведки (equirect-текстура) и остаются видны приглушённо —
+    // туман рассеивается там, где ты ходил. Край пузыря шевелится шумом, чтобы не выглядел как циркуль.
+    const SKY_COLOR = new THREE.Color(0xa9c7e0);
+    const FOW_COLOR = new THREE.Color(0x141923);
+    const EX_W = 512, EX_H = 256;
+    const exploredData = new Uint8Array(EX_W * EX_H);
+    const exploredTex = new THREE.DataTexture(exploredData, EX_W, EX_H, THREE.RedFormat, THREE.UnsignedByteType);
+    exploredTex.wrapS = THREE.RepeatWrapping;
+    exploredTex.minFilter = exploredTex.magFilter = THREE.LinearFilter;
+    exploredTex.needsUpdate = true;
+
+    const fowUniforms = {
+      uPlayerDir: { value: new THREE.Vector3(1, 0, 0) },
+      uFowR:      { value: 1 },        // радиус видимости по дуге, в метрах
+      uWorldR:    { value: 1 },
+      uMemory:    { value: 0.35 },
+      uFowOn:     { value: 1 },
+      uTime:      { value: 0 },
+      uFowColor:  { value: FOW_COLOR },
+      uExplored:  { value: exploredTex },
+    };
+
+    const FOW_FRAG_PRELUDE = /* glsl */`
+      uniform vec3 uPlayerDir; uniform float uFowR; uniform float uWorldR; uniform float uMemory;
+      uniform float uFowOn; uniform float uTime; uniform vec3 uFowColor; uniform sampler2D uExplored;
+      varying vec3 vFowWorldPos;
+      float fowHash(vec3 p) { p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3)); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+      float fowNoise(vec3 x) {
+        vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(fowHash(i), fowHash(i + vec3(1,0,0)), f.x), mix(fowHash(i + vec3(0,1,0)), fowHash(i + vec3(1,1,0)), f.x), f.y),
+                   mix(mix(fowHash(i + vec3(0,0,1)), fowHash(i + vec3(1,0,1)), f.x), mix(fowHash(i + vec3(0,1,1)), fowHash(i + vec3(1,1,1)), f.x), f.y), f.z);
+      }
+    `;
+    const FOW_FRAG_MAIN = /* glsl */`
+      if (uFowOn > 0.5) {
+        vec3 dir = normalize(vFowWorldPos);
+        float arc = acos(clamp(dot(dir, uPlayerDir), -1.0, 1.0)) * uWorldR;
+        // живой край: два слоя шума, медленно плывущих по времени
+        float n = fowNoise(dir * 9.0 + vec3(0.0, uTime * 0.15, 0.0)) * 0.7
+                + fowNoise(dir * 27.0 - vec3(uTime * 0.3, 0.0, 0.0)) * 0.3 - 0.5;
+        float edge = uFowR * (1.0 + n * 0.3);
+        float vis = 1.0 - smoothstep(edge * 0.65, edge, arc);
+        vec2 euv = vec2(atan(dir.z, dir.x) / 6.2831853 + 0.5, asin(clamp(dir.y, -1.0, 1.0)) / 3.1415927 + 0.5);
+        float explored = texture2D(uExplored, euv).r;
+        // разведанное — приглушённое и полуобесцвеченное, как воспоминание
+        float luma = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+        vec3 remembered = mix(uFowColor, mix(gl_FragColor.rgb, vec3(luma), 0.6), uMemory * explored);
+        gl_FragColor.rgb = mix(remembered, gl_FragColor.rgb, vis);
+      }
+    `;
+    // подмешиваем туман войны в любой стандартный материал three.js
+    function fogify(mat) {
+      mat.onBeforeCompile = shader => {
+        Object.assign(shader.uniforms, fowUniforms);
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vFowWorldPos;')
+          .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFowWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\n' + FOW_FRAG_PRELUDE)
+          .replace('#include <fog_fragment>', '#include <fog_fragment>\n' + FOW_FRAG_MAIN);
+      };
+      mat.customProgramCacheKey = () => 'fow';
+      return mat;
+    }
+
+    // отметить на карте разведки круг радиусом angR (радиан) вокруг направления dir
+    function stampExplored(dir, angR) {
+      const lat0 = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+      const lon0 = Math.atan2(dir.z, dir.x);
+      const cosOuter = Math.cos(angR), cosInner = Math.cos(angR * 0.75);
+      const yMin = Math.max(0, Math.floor(((lat0 - angR) / Math.PI + 0.5) * EX_H));
+      const yMax = Math.min(EX_H - 1, Math.ceil(((lat0 + angR) / Math.PI + 0.5) * EX_H));
+      for (let y = yMin; y <= yMax; y++) {
+        const lat = ((y + 0.5) / EX_H - 0.5) * Math.PI;
+        const cl = Math.cos(lat), sl = Math.sin(lat);
+        const dlon = cl > 1e-3 ? Math.min(Math.PI, angR / cl * 1.1) : Math.PI;   // у полюсов — вся строка
+        const xc = Math.round((lon0 / (2 * Math.PI) + 0.5) * EX_W);
+        const dx = Math.ceil(dlon / (2 * Math.PI) * EX_W);
+        for (let k = -dx; k <= dx; k++) {
+          const x = ((xc + k) % EX_W + EX_W) % EX_W;
+          const lon = ((x + 0.5) / EX_W - 0.5) * 2 * Math.PI;
+          const d = cl * Math.cos(lon) * dir.x + sl * dir.y + cl * Math.sin(lon) * dir.z;
+          if (d <= cosOuter) continue;
+          const v = d >= cosInner ? 255 : Math.round(255 * (d - cosOuter) / (cosInner - cosOuter));
+          const idx = y * EX_W + x;
+          if (v > exploredData[idx]) exploredData[idx] = v;
+        }
+      }
+      exploredTex.needsUpdate = true;
+    }
+    function clearExplored() { exploredData.fill(0); exploredTex.needsUpdate = true; lastStampDir.set(0, 0, 0); }
+    // доля разведанной поверхности (с весом cos(lat), т.к. equirect растягивает полюса)
+    function exploredPercent() {
+      let sum = 0, total = 0;
+      for (let y = 0; y < EX_H; y++) {
+        const w = Math.cos(((y + 0.5) / EX_H - 0.5) * Math.PI);
+        let row = 0;
+        for (let x = 0; x < EX_W; x++) row += exploredData[y * EX_W + x];
+        sum += row * w; total += 255 * EX_W * w;
+      }
+      return 100 * sum / total;
+    }
+    const lastStampDir = new THREE.Vector3();
+    let exploredPct = 0, pctFrame = 0;
 
     // ---------- сфера (смотрим изнутри => BackSide) ----------
     function makeGridTexture() {
@@ -136,7 +252,7 @@
 
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(1, 128, 64),
-      new THREE.MeshStandardMaterial({ map: makeGridTexture(), side: THREE.BackSide, roughness: 1 })
+      fogify(new THREE.MeshStandardMaterial({ map: makeGridTexture(), side: THREE.BackSide, roughness: 1 }))
     );
     scene.add(sphere);
 
@@ -173,7 +289,7 @@
       const w = 1 + Math.random() * 3;
       const mesh = new THREE.Mesh(
         Math.random() < 0.5 ? new THREE.BoxGeometry(w, h, w) : new THREE.CylinderGeometry(w / 2, w / 2, h, 12),
-        new THREE.MeshStandardMaterial({ color: palette[i % palette.length], roughness: .8 })
+        fogify(new THREE.MeshStandardMaterial({ color: palette[i % palette.length], roughness: .8 }))
       );
       addProp(mesh, randomDir(), h);
     }
@@ -181,7 +297,7 @@
     for (let i = 0; i < 6; i++) {
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.4, 0.6, 18, 10),
-        new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff4040, emissiveIntensity: .6 })
+        fogify(new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff4040, emissiveIntensity: .6 }))
       );
       addProp(pole, randomDir(), 18);
     }
@@ -228,9 +344,9 @@
     const balls = [];    // { mesh, vel, text }
     const plaques = [];  // { mesh, n } — поворачиваем к игроку каждый кадр
 
-    const ballMaterial = new THREE.MeshStandardMaterial({
+    const ballMaterial = fogify(new THREE.MeshStandardMaterial({
       color: PLAYER_COLOR, emissive: PLAYER_COLOR, emissiveIntensity: .2, roughness: .45,
-    });
+    }));
     // шар "в руке" — ребёнок камеры; при FOV 75 и дистанции 2 радиус 0.23 даёт ~15% высоты экрана
     const heldBall = new THREE.Mesh(new THREE.SphereGeometry(0.23, 32, 16), ballMaterial);
     heldBall.position.set(1.05, -0.5, -2);
@@ -305,7 +421,7 @@
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       return new THREE.Mesh(
         new THREE.PlaneGeometry(PLAQUE_W, PLAQUE_H),
-        new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })
+        fogify(new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }))
       );
     }
 
@@ -370,6 +486,7 @@
     }
     function syncInputs() { for (const k in inputs) inputs[k].value = P[k]; }
 
+    document.getElementById('clearFow').addEventListener('click', () => { clearExplored(); exploredPct = 0; });
     document.getElementById('reset').addEventListener('click', () => {
       Object.assign(P, DEFAULTS);
       localStorage.removeItem(STORAGE_KEY);
@@ -435,9 +552,26 @@
 
       updateMessages(dt);
 
+      // туман войны: униформы + отметка разведанного, когда отошли достаточно далеко от прошлой отметки
+      const fowOn = P.FOW > 0.5;
+      fowUniforms.uFowOn.value = fowOn ? 1 : 0;
+      fowUniforms.uFowR.value = P.FOW_R * P.R;
+      fowUniforms.uWorldR.value = P.R;
+      fowUniforms.uMemory.value = P.FOW_MEMORY;
+      fowUniforms.uTime.value = clock.elapsedTime;
+      fowUniforms.uPlayerDir.value.copy(pos).normalize();
+      scene.fog.color.copy(fowOn ? FOW_COLOR : SKY_COLOR);
+      if (fowOn) {
+        // FOW_R — доля радиуса, т.е. угловой радиус пузыря в радианах; карта разведки от R не зависит
+        const moved = lastStampDir.lengthSq() === 0 || lastStampDir.angleTo(fowUniforms.uPlayerDir.value) > P.FOW_R * 0.12;
+        if (moved) { stampExplored(fowUniforms.uPlayerDir.value, P.FOW_R); lastStampDir.copy(fowUniforms.uPlayerDir.value); }
+        if (++pctFrame % 60 === 0) exploredPct = exploredPercent();
+      }
+
       hud.textContent =
         `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
-        `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}`;
+        `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}` +
+        (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '');
 
       renderer.render(scene, camera);
       requestAnimationFrame(tick);
