@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Inner Sphere — прототип</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 12px; top: 12px; color: #fff; font-size: 13px; line-height: 1.5;
+      background: rgba(0,0,0,.45); padding: 8px 12px; border-radius: 8px; pointer-events: none;
+    }
+    #overlay {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.55); color: #fff; font-size: 20px; cursor: pointer; text-align: center;
+    }
+    #overlay small { display: block; margin-top: 10px; font-size: 14px; opacity: .8; }
+    #crosshair {
+      position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+      border-radius: 50%; background: #fff; opacity: .8; pointer-events: none;
+    }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="hud"></div>
+  <div id="crosshair"></div>
+  <div id="overlay">
+    Клик, чтобы начать
+    <small>WASD — ходьба · мышь — обзор · Space — прыжок · Esc — выйти из захвата мыши</small>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ---------- параметры мира ----------
+    const R = 80;            // радиус сферы
+    const EYE = 1.7;         // высота глаз над стенкой
+    const SPEED = 12;        // м/с
+    const JUMP_V = 7;        // начальная скорость прыжка
+    const GRAVITY = 18;      // ускорение "к стенке"
+    const MOUSE_SENS = 0.0022;
+
+    // ---------- сцена ----------
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xa9c7e0);
+    // лёгкий туман: далёкая стенка (потолок) мягко тает, но горизонт, уходящий вверх, остаётся видимым
+    scene.fog = new THREE.Fog(0xa9c7e0, R * 0.9, R * 3.2);
+
+    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, R * 4);
+
+    // ---------- сфера (смотрим изнутри => BackSide) ----------
+    function makeGridTexture() {
+      const c = document.createElement('canvas');
+      c.width = c.height = 512;
+      const g = c.getContext('2d');
+      g.fillStyle = '#5c9a4c';
+      g.fillRect(0, 0, 512, 512);
+      // шахматная подложка
+      g.fillStyle = '#548f46';
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++)
+        if ((x + y) % 2) g.fillRect(x * 128, y * 128, 128, 128);
+      // сетка
+      g.strokeStyle = 'rgba(255,255,255,.35)';
+      g.lineWidth = 3;
+      for (let i = 0; i <= 4; i++) {
+        g.beginPath(); g.moveTo(i * 128, 0); g.lineTo(i * 128, 512); g.stroke();
+        g.beginPath(); g.moveTo(0, i * 128); g.lineTo(512, i * 128); g.stroke();
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(24, 12);
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      return t;
+    }
+
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(R, 128, 64),
+      new THREE.MeshStandardMaterial({ map: makeGridTexture(), side: THREE.BackSide, roughness: 1 })
+    );
+    scene.add(sphere);
+
+    // ---------- свет ----------
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const sun = new THREE.PointLight(0xfff2d8, 3 * R * R, 0, 2); // "солнце" в центре сферы
+    scene.add(sun);
+    const sunBall = new THREE.Mesh(
+      new THREE.SphereGeometry(2.5, 24, 16),
+      new THREE.MeshBasicMaterial({ color: 0xfff1b0, fog: false })
+    );
+    scene.add(sunBall);
+
+    // ---------- объекты на внутренней поверхности ----------
+    // ставим объект "ногами" на стенку в точке с нормалью n (n — направление из центра к стенке)
+    function placeOnWall(mesh, n, height) {
+      const up = n.clone().negate();                       // "верх" для стоящего у стенки — к центру
+      mesh.position.copy(n).multiplyScalar(R - height / 2);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+      scene.add(mesh);
+    }
+    function randomDir() {
+      const v = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1);
+      return v.lengthSq() < 1e-4 ? randomDir() : v.normalize();
+    }
+
+    const palette = [0xe4572e, 0x17bebb, 0xffc914, 0x2e282a, 0x76b041, 0x9b5de5, 0xf15bb5];
+    for (let i = 0; i < 90; i++) {
+      const h = 2 + Math.random() * 6;
+      const w = 1 + Math.random() * 3;
+      const mesh = new THREE.Mesh(
+        Math.random() < 0.5 ? new THREE.BoxGeometry(w, h, w) : new THREE.CylinderGeometry(w / 2, w / 2, h, 12),
+        new THREE.MeshStandardMaterial({ color: palette[i % palette.length], roughness: .8 })
+      );
+      placeOnWall(mesh, randomDir(), h);
+    }
+    // несколько высоких "маяков" — ориентиры, хорошо видны на уходящем вверх горизонте
+    for (let i = 0; i < 6; i++) {
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.4, 0.6, 18, 10),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff4040, emissiveIntensity: .6 })
+      );
+      placeOnWall(pole, randomDir(), 18);
+    }
+
+    // ---------- игрок ----------
+    // pos — позиция глаз. Гравитация направлена от центра к стенке, поэтому "верх" = -normalize(pos)
+    const pos = new THREE.Vector3(R - EYE, 0, 0);        // стартуем на "экваторе" (вдали от полюсов UV-сетки)
+    const forward = new THREE.Vector3(0, 0, -1);         // касательное направление взгляда
+    let pitch = 0;                                       // наклон камеры вверх/вниз
+    let jumpH = 0, jumpV = 0;                            // высота над стенкой (прыжок) и скорость
+
+    const keys = new Set();
+    addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'Space' && jumpH === 0) jumpV = JUMP_V; });
+    addEventListener('keyup', e => keys.delete(e.code));
+    addEventListener('blur', () => keys.clear());
+
+    const overlay = document.getElementById('overlay');
+    overlay.addEventListener('click', () => renderer.domElement.requestPointerLock());
+    document.addEventListener('pointerlockchange', () => {
+      overlay.style.display = document.pointerLockElement ? 'none' : 'flex';
+    });
+
+    const _up = new THREE.Vector3(), _right = new THREE.Vector3(), _move = new THREE.Vector3(), _m = new THREE.Matrix4();
+
+    addEventListener('mousemove', e => {
+      if (!document.pointerLockElement) return;
+      _up.copy(pos).normalize().negate();
+      forward.applyAxisAngle(_up, -e.movementX * MOUSE_SENS);
+      pitch = THREE.MathUtils.clamp(pitch - e.movementY * MOUSE_SENS, -Math.PI * 0.45, Math.PI * 0.45);
+    });
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    const hud = document.getElementById('hud');
+    const clock = new THREE.Clock();
+
+    function tick() {
+      const dt = Math.min(clock.getDelta(), 0.05);
+
+      // локальный базис: up — к центру сферы, forward — переносим в касательную плоскость
+      _up.copy(pos).normalize().negate();
+      forward.addScaledVector(_up, -forward.dot(_up)).normalize();
+      _right.crossVectors(forward, _up).normalize();
+
+      // ходьба по касательной
+      _move.set(0, 0, 0);
+      if (keys.has('KeyW') || keys.has('ArrowUp')) _move.add(forward);
+      if (keys.has('KeyS') || keys.has('ArrowDown')) _move.sub(forward);
+      if (keys.has('KeyD') || keys.has('ArrowRight')) _move.add(_right);
+      if (keys.has('KeyA') || keys.has('ArrowLeft')) _move.sub(_right);
+      if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), SPEED * dt);
+
+      // прыжок: "притяжение" тянет обратно к стенке
+      if (jumpH > 0 || jumpV > 0) {
+        jumpV -= GRAVITY * dt;
+        jumpH = Math.max(0, jumpH + jumpV * dt);
+        if (jumpH === 0) jumpV = 0;
+      }
+
+      // держим игрока на сфере радиуса (R - EYE - jumpH) — это и есть "притяжение к внутренней поверхности"
+      pos.setLength(R - EYE - jumpH);
+
+      // камера: X = right, Y = up, Z = -forward, затем наклон по pitch
+      camera.position.copy(pos);
+      _m.makeBasis(_right, _up, forward.clone().negate());
+      camera.quaternion.setFromRotationMatrix(_m);
+      camera.rotateX(pitch);
+
+      hud.textContent =
+        `R=${R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
+        `  |  высота над стенкой: ${jumpH.toFixed(2)}`;
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    tick();
+  </script>
+</body>
+</html>
