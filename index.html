@@ -87,10 +87,11 @@
       ['FOW',        'Туман войны (0/1)',     0,      1,    1],
       ['FOW_R',      'Радиус видимости (×R)', 0.1,    1.5,  0.05],
       ['FOW_MEMORY', 'Яркость разведанного',  0,      1,    0.05],
+      ['CAMEL_SPEED', 'Скорость каравана',    0,      30,   0.5],
     ];
     const DEFAULTS = {
       R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45,
-      FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35,
+      FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35, CAMEL_SPEED: 2.5,
     };
     const STORAGE_KEY = 'inner-sphere-params';
 
@@ -455,6 +456,161 @@
         p.mesh.quaternion.setFromRotationMatrix(_m.makeBasis(_px, _pu, _pz));
       }
     }
+
+    // ---------- караван ----------
+    // 4–7 верблюдов идут гуськом по внутренней поверхности. Вожак движется по большому кругу ("кольцу"),
+    // каждые пол-сферы (угол π) кольцо случайно поворачивается. Остальные идут по следу вожака с отставанием
+    // по дуге. Стартуют далеко от игрока — в тумане, пока их не разведаешь.
+    const CAMEL_SPACING = 3.4;      // метров между верблюдами по дуге
+    const CAMEL_COLORS = [0xc9a26b, 0xb8925a, 0xd7b07c, 0xa9835a, 0xe0be8a];
+
+    function makeCamel(color, blanketColor) {
+      const g = new THREE.Group();
+      const hide = fogify(new THREE.MeshStandardMaterial({ color, roughness: .95, flatShading: true }));
+      const dark = fogify(new THREE.MeshStandardMaterial({
+        color: new THREE.Color(color).multiplyScalar(0.72), roughness: .95, flatShading: true,
+      }));
+      // модель: +Z — вперёд, +Y — вверх, начало координат — на земле под центром тела
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.9, 2.2), hide);
+      body.position.set(0, 1.5, 0);
+      const hump1 = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), hide);
+      hump1.position.set(0, 2.12, 0.45); hump1.scale.set(1, 0.85, 1.05);
+      const hump2 = hump1.clone(); hump2.position.z = -0.5;
+      // шея с головой — отдельный узел с pivot у груди, чтобы покачивать
+      const neck = new THREE.Group();
+      neck.position.set(0, 1.75, 1.0);
+      const neckMesh = new THREE.Mesh(new THREE.BoxGeometry(0.34, 1.15, 0.38), hide);
+      neckMesh.position.set(0, 0.5, 0.2); neckMesh.rotation.x = 0.4;
+      const head = new THREE.Group();
+      head.position.set(0, 1.0, 0.5);
+      const skull = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.72), dark);
+      skull.position.set(0, 0, 0.2);
+      const earGeo = new THREE.BoxGeometry(0.08, 0.16, 0.08);
+      const earL = new THREE.Mesh(earGeo, dark); earL.position.set(-0.13, 0.2, -0.05);
+      const earR = earL.clone(); earR.position.x = 0.13;
+      head.add(skull, earL, earR);
+      neck.add(neckMesh, head);
+      // хвост — pivot сверху
+      const tailGeo = new THREE.BoxGeometry(0.1, 0.65, 0.1); tailGeo.translate(0, -0.32, 0);
+      const tail = new THREE.Mesh(tailGeo, dark);
+      tail.position.set(0, 1.85, -1.12);
+      // ноги — pivot у бедра, геометрия сдвинута вниз
+      const legGeo = new THREE.BoxGeometry(0.2, 1.12, 0.22); legGeo.translate(0, -0.56, 0);
+      const legs = [];
+      for (const [x, z] of [[-0.28, 0.8], [0.28, 0.8], [-0.28, -0.8], [0.28, -0.8]]) {
+        const leg = new THREE.Mesh(legGeo, dark);
+        leg.position.set(x, 1.1, z);
+        legs.push(leg);
+      }
+      g.add(body, hump1, hump2, neck, tail, ...legs);
+      if (blanketColor) {
+        const blanket = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.14, 0.75),
+          fogify(new THREE.MeshStandardMaterial({ color: blanketColor, roughness: .8 })));
+        blanket.position.set(0, 1.97, -0.03);
+        g.add(blanket);
+      }
+      return { group: g, body, legs, neck, head, tail };
+    }
+
+    const caravan = (() => {
+      const playerDir = pos.clone().normalize();
+      let dir;                                        // направление на вожака
+      do dir = randomDir(); while (dir.angleTo(playerDir) < 1.2);   // стартуем далеко, в тумане
+      const tan = randomDir();
+      tan.addScaledVector(dir, -tan.dot(dir)).normalize();   // случайная касательная: проекция на касательную плоскость
+
+      const count = 4 + Math.floor(Math.random() * 4);   // 4..7
+      const camels = [];
+      for (let i = 0; i < count; i++) {
+        const c = makeCamel(
+          CAMEL_COLORS[Math.floor(Math.random() * CAMEL_COLORS.length)],
+          Math.random() < 0.6 ? palette[Math.floor(Math.random() * palette.length)] : null
+        );
+        c.phase = Math.random() * Math.PI * 2;
+        // фазы ног: примерно диагональная походка, но с разбросом — идут не в такт
+        c.legPhase = [0, Math.PI, Math.PI * 0.55, Math.PI * 1.55].map(p => p + (Math.random() - 0.5) * 0.7);
+        c.gait = 0.85 + Math.random() * 0.3;              // индивидуальный темп
+        c.group.scale.setScalar(0.9 + Math.random() * 0.25);
+        scene.add(c.group);
+        camels.push(c);
+      }
+      // след вожака: [{dir, s}], s — накопленный угол пути; заполняем назад по геодезической,
+      // чтобы верблюды с самого начала стояли гуськом
+      const trail = [];
+      const backAngle = (count + 1) * CAMEL_SPACING / P.R;
+      for (let s = -backAngle; s < 0; s += 0.004)
+        trail.push({ dir: dir.clone().multiplyScalar(Math.cos(s)).addScaledVector(tan, Math.sin(s)).normalize(), s });
+      trail.push({ dir: dir.clone(), s: 0 });
+      return { dir, tan, s: 0, travelled: 0, trail, camels };
+    })();
+
+    // положение на следе по накопленному углу s (slerp между соседними отметками)
+    const _ta = new THREE.Vector3(), _tb = new THREE.Vector3();
+    function trailDir(s, out) {
+      const t = caravan.trail;
+      if (s <= t[0].s) return out.copy(t[0].dir);
+      for (let j = t.length - 1; j > 0; j--) {
+        if (t[j - 1].s <= s) {
+          const a = t[j - 1], b = t[j];
+          const k = b.s === a.s ? 0 : (s - a.s) / (b.s - a.s);
+          return out.copy(a.dir).lerp(b.dir, k).normalize();
+        }
+      }
+      return out.copy(t[t.length - 1].dir);
+    }
+
+    const _cd = new THREE.Vector3(), _cf = new THREE.Vector3(), _cu = new THREE.Vector3(), _cr = new THREE.Vector3(), _axis = new THREE.Vector3();
+    function updateCaravan(dt) {
+      const cv = caravan, R = P.R;
+      // вожак: шаг по большому кругу в плоскости (dir, tan)
+      const ang = P.CAMEL_SPEED * dt / R;
+      if (ang > 0) {
+        _cd.copy(cv.dir);
+        cv.dir.multiplyScalar(Math.cos(ang)).addScaledVector(cv.tan, Math.sin(ang)).normalize();
+        cv.tan.multiplyScalar(Math.cos(ang)).addScaledVector(_cd, -Math.sin(ang));
+        cv.tan.addScaledVector(cv.dir, -cv.tan.dot(cv.dir)).normalize();
+        cv.s += ang;
+        cv.travelled += ang;
+        const last = cv.trail[cv.trail.length - 1];
+        if (cv.s - last.s > 0.002) cv.trail.push({ dir: cv.dir.clone(), s: cv.s });
+        // пол-сферы пройдено — поворачиваем кольцо на случайный угол 35..110° в любую сторону
+        if (cv.travelled >= Math.PI) {
+          cv.travelled = 0;
+          const turn = (Math.random() < 0.5 ? -1 : 1) * THREE.MathUtils.degToRad(35 + Math.random() * 75);
+          cv.tan.applyAxisAngle(cv.dir, turn).normalize();
+        }
+        // подрезаем хвост следа
+        const minS = cv.s - (cv.camels.length + 1) * CAMEL_SPACING / R - 0.05;
+        while (cv.trail.length > 2 && cv.trail[1].s < minS) cv.trail.shift();
+      }
+
+      const t = clock.elapsedTime;
+      const spacing = CAMEL_SPACING / R;
+      cv.camels.forEach((c, i) => {
+        const s = cv.s - i * spacing;
+        trailDir(s, _cd);
+        trailDir(s + 0.01, _cf);
+        // базис: Y — к центру, Z — вперёд по следу, X — вправо
+        _cu.copy(_cd).negate();
+        _cf.sub(_cd).addScaledVector(_cu, -_cf.dot(_cu));
+        if (_cf.lengthSq() < 1e-10) _cf.copy(cv.tan);
+        _cf.normalize();
+        _cr.crossVectors(_cu, _cf);
+        c.group.position.copy(_cd).multiplyScalar(R - 0.03);
+        c.group.quaternion.setFromRotationMatrix(_m.makeBasis(_cr, _cu, _cf));
+
+        // анимация: ноги асинхронно, шея и голова покачиваются, хвост машет, тело чуть подпрыгивает
+        const w = P.CAMEL_SPEED > 0 ? (2.0 + P.CAMEL_SPEED * 0.9) * c.gait : 0.6;
+        const ph = t * w + c.phase;
+        const amp = P.CAMEL_SPEED > 0 ? 0.42 : 0.03;
+        c.legs.forEach((leg, k) => { leg.rotation.x = Math.sin(ph + c.legPhase[k]) * amp; });
+        c.neck.rotation.x = Math.sin(ph * 0.5) * 0.1 - 0.05;
+        c.head.rotation.x = Math.sin(ph * 0.5 + 1.3) * 0.18;
+        c.head.rotation.y = Math.sin(ph * 0.23 + c.phase) * 0.25;
+        c.tail.rotation.x = Math.sin(ph * 0.7 + 2) * 0.25;
+        c.body.position.y = 1.5 + Math.abs(Math.sin(ph)) * 0.04;
+      });
+    }
     addEventListener('keyup', e => keys.delete(e.code));
     addEventListener('blur', () => keys.clear());
 
@@ -518,6 +674,20 @@
     const hud = document.getElementById('hud');
     const clock = new THREE.Clock();
 
+    // отладка: ?debug в URL открывает состояние в консоли (window.dbg), напр. dbg.goToCaravan()
+    if (location.search.includes('debug')) {
+      window.dbg = {
+        P, pos, forward, caravan, camera,
+        setPitch: v => { pitch = v; },
+        // встать в 12 м позади каравана лицом к нему
+        goToCaravan() {
+          const back = caravan.trail[0].dir;
+          pos.copy(back).multiplyScalar(P.R - P.EYE);
+          forward.copy(caravan.dir).sub(back);
+        },
+      };
+    }
+
     function tick() {
       const dt = Math.min(clock.getDelta(), 0.05);
 
@@ -551,6 +721,7 @@
       camera.rotateX(pitch);
 
       updateMessages(dt);
+      updateCaravan(dt);
 
       // туман войны: униформы + отметка разведанного, когда отошли достаточно далеко от прошлой отметки
       const fowOn = P.FOW > 0.5;
@@ -571,7 +742,8 @@
       hud.textContent =
         `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
         `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}` +
-        (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '');
+        (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '') +
+        `  |  караван: ${(caravan.dir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м`;
 
       renderer.render(scene, camera);
       requestAnimationFrame(tick);
