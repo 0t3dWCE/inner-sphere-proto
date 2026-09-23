@@ -8,7 +8,7 @@
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; }
     canvas { display: block; }
     #hud {
-      position: fixed; left: 12px; top: 12px; color: #fff; font-size: 13px; line-height: 1.5;
+      position: fixed; left: 12px; bottom: 12px; color: #fff; font-size: 13px; line-height: 1.5;
       background: rgba(0,0,0,.45); padding: 8px 12px; border-radius: 8px; pointer-events: none;
     }
     #overlay {
@@ -20,6 +20,22 @@
       position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
       border-radius: 50%; background: #fff; opacity: .8; pointer-events: none;
     }
+    #settings {
+      position: fixed; right: 12px; top: 12px; z-index: 2; color: #fff; font-size: 13px;
+      background: rgba(0,0,0,.55); padding: 10px 12px; border-radius: 8px; min-width: 230px;
+    }
+    #settings .title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
+    #settings button {
+      background: #2b6cb0; color: #fff; border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px;
+    }
+    #settings button:hover { background: #3182ce; }
+    #settings label { display: grid; grid-template-columns: 1fr 84px; gap: 8px; align-items: center; margin: 4px 0; }
+    #settings input {
+      width: 100%; box-sizing: border-box; background: rgba(255,255,255,.12); color: #fff;
+      border: 1px solid rgba(255,255,255,.25); border-radius: 4px; padding: 3px 6px; font-size: 13px;
+    }
+    #settings input:focus { outline: 1px solid #63b3ed; }
+    #settings .hint { margin-top: 6px; font-size: 11px; opacity: .65; }
   </style>
   <script type="importmap">
     { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -27,6 +43,11 @@
 </head>
 <body>
   <div id="hud"></div>
+  <div id="settings">
+    <div class="title"><span>Параметры</span><button id="reset" type="button">Сброс</button></div>
+    <form id="params" autocomplete="off"></form>
+    <div class="hint">Esc — отпустить мышь, чтобы редактировать. Значения сохраняются в браузере.</div>
+  </div>
   <div id="crosshair"></div>
   <div id="overlay">
     Клик, чтобы начать
@@ -37,12 +58,28 @@
     import * as THREE from 'three';
 
     // ---------- параметры мира ----------
-    const R = 80;            // радиус сферы
-    const EYE = 1.7;         // высота глаз над стенкой
-    const SPEED = 12;        // м/с
-    const JUMP_V = 7;        // начальная скорость прыжка
-    const GRAVITY = 18;      // ускорение "к стенке"
-    const MOUSE_SENS = 0.0022;
+    // [ключ, подпись, min, max, step]
+    const SCHEMA = [
+      ['R',          'Радиус сферы',          10,     500,  5],
+      ['EYE',        'Высота глаз',           0.5,    50,   0.1],
+      ['SPEED',      'Скорость ходьбы',       1,      200,  1],
+      ['JUMP_V',     'Скорость прыжка',       0,      50,   0.5],
+      ['GRAVITY',    'Гравитация (к стенке)', 0.1,    100,  0.5],
+      ['MOUSE_SENS', 'Чувствительность мыши', 0.0005, 0.01, 0.0005],
+    ];
+    const DEFAULTS = { R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022 };
+    const STORAGE_KEY = 'inner-sphere-params';
+
+    function loadParams() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        const p = { ...DEFAULTS };
+        for (const [k, , min, max] of SCHEMA)
+          if (Number.isFinite(saved[k])) p[k] = THREE.MathUtils.clamp(saved[k], min, max);
+        return p;
+      } catch { return { ...DEFAULTS }; }
+    }
+    const P = loadParams();   // живые параметры; читаются каждый кадр
 
     // ---------- сцена ----------
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -53,9 +90,9 @@
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xa9c7e0);
     // лёгкий туман: далёкая стенка (потолок) мягко тает, но горизонт, уходящий вверх, остаётся видимым
-    scene.fog = new THREE.Fog(0xa9c7e0, R * 0.9, R * 3.2);
+    scene.fog = new THREE.Fog(0xa9c7e0, 1, 2);
 
-    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, R * 4);
+    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 100);
 
     // ---------- сфера (смотрим изнутри => BackSide) ----------
     function makeGridTexture() {
@@ -83,14 +120,14 @@
     }
 
     const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(R, 128, 64),
+      new THREE.SphereGeometry(1, 128, 64),
       new THREE.MeshStandardMaterial({ map: makeGridTexture(), side: THREE.BackSide, roughness: 1 })
     );
     scene.add(sphere);
 
     // ---------- свет ----------
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const sun = new THREE.PointLight(0xfff2d8, 3 * R * R, 0, 2); // "солнце" в центре сферы
+    const sun = new THREE.PointLight(0xfff2d8, 1, 0, 2); // "солнце" в центре сферы
     scene.add(sun);
     const sunBall = new THREE.Mesh(
       new THREE.SphereGeometry(2.5, 24, 16),
@@ -99,11 +136,15 @@
     scene.add(sunBall);
 
     // ---------- объекты на внутренней поверхности ----------
-    // ставим объект "ногами" на стенку в точке с нормалью n (n — направление из центра к стенке)
-    function placeOnWall(mesh, n, height) {
-      const up = n.clone().negate();                       // "верх" для стоящего у стенки — к центру
-      mesh.position.copy(n).multiplyScalar(R - height / 2);
-      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+    // объект стоит "ногами" на стенке в точке с нормалью n (n — направление из центра к стенке)
+    const props = [];   // { mesh, n, h } — чтобы переставлять при смене радиуса
+    function placeOnWall(mesh, n, h) {
+      mesh.position.copy(n).multiplyScalar(P.R - h / 2);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n.clone().negate()); // "верх" — к центру
+    }
+    function addProp(mesh, n, h) {
+      placeOnWall(mesh, n, h);
+      props.push({ mesh, n, h });
       scene.add(mesh);
     }
     function randomDir() {
@@ -119,7 +160,7 @@
         Math.random() < 0.5 ? new THREE.BoxGeometry(w, h, w) : new THREE.CylinderGeometry(w / 2, w / 2, h, 12),
         new THREE.MeshStandardMaterial({ color: palette[i % palette.length], roughness: .8 })
       );
-      placeOnWall(mesh, randomDir(), h);
+      addProp(mesh, randomDir(), h);
     }
     // несколько высоких "маяков" — ориентиры, хорошо видны на уходящем вверх горизонте
     for (let i = 0; i < 6; i++) {
@@ -127,20 +168,74 @@
         new THREE.CylinderGeometry(0.4, 0.6, 18, 10),
         new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff4040, emissiveIntensity: .6 })
       );
-      placeOnWall(pole, randomDir(), 18);
+      addProp(pole, randomDir(), 18);
     }
+
+    // всё, что зависит от радиуса: геометрия сферы, туман, свет, дальность камеры, позиции объектов
+    function applyRadius() {
+      const R = P.R;
+      sphere.geometry.dispose();
+      sphere.geometry = new THREE.SphereGeometry(R, 128, 64);
+      scene.fog.near = R * 0.9;
+      scene.fog.far = R * 3.2;
+      camera.far = R * 4;
+      camera.updateProjectionMatrix();
+      sun.intensity = 3 * R * R;
+      for (const p of props) placeOnWall(p.mesh, p.n, p.h);
+    }
+    applyRadius();
 
     // ---------- игрок ----------
     // pos — позиция глаз. Гравитация направлена от центра к стенке, поэтому "верх" = -normalize(pos)
-    const pos = new THREE.Vector3(R - EYE, 0, 0);        // стартуем на "экваторе" (вдали от полюсов UV-сетки)
+    const pos = new THREE.Vector3(P.R - P.EYE, 0, 0);    // стартуем на "экваторе" (вдали от полюсов UV-сетки)
     const forward = new THREE.Vector3(0, 0, -1);         // касательное направление взгляда
     let pitch = 0;                                       // наклон камеры вверх/вниз
     let jumpH = 0, jumpV = 0;                            // высота над стенкой (прыжок) и скорость
 
+    const isTyping = e => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
     const keys = new Set();
-    addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'Space' && jumpH === 0) jumpV = JUMP_V; });
+    addEventListener('keydown', e => {
+      if (isTyping(e)) return;
+      keys.add(e.code);
+      if (e.code === 'Space' && jumpH === 0) jumpV = P.JUMP_V;
+    });
     addEventListener('keyup', e => keys.delete(e.code));
     addEventListener('blur', () => keys.clear());
+
+    // ---------- панель параметров (правый верхний угол) ----------
+    const form = document.getElementById('params');
+    const inputs = {};
+    for (const [key, label, min, max, step] of SCHEMA) {
+      const row = document.createElement('label');
+      const span = document.createElement('span');
+      span.textContent = label;
+      const input = document.createElement('input');
+      Object.assign(input, { type: 'number', name: key, min, max, step, value: P[key] });
+      input.addEventListener('input', () => {
+        const v = parseFloat(input.value);
+        if (!Number.isFinite(v)) return;
+        setParam(key, THREE.MathUtils.clamp(v, min, max));
+      });
+      row.append(span, input);
+      form.appendChild(row);
+      inputs[key] = input;
+    }
+    form.addEventListener('submit', e => e.preventDefault());
+
+    function setParam(key, value) {
+      if (key === 'EYE') value = Math.min(value, P.R / 2);   // глаза не выше центра сферы
+      P[key] = value;
+      if (key === 'R') { P.EYE = Math.min(P.EYE, P.R / 2); inputs.EYE.value = P.EYE; applyRadius(); }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(P));
+    }
+    function syncInputs() { for (const k in inputs) inputs[k].value = P[k]; }
+
+    document.getElementById('reset').addEventListener('click', () => {
+      Object.assign(P, DEFAULTS);
+      localStorage.removeItem(STORAGE_KEY);
+      syncInputs();
+      applyRadius();
+    });
 
     const overlay = document.getElementById('overlay');
     overlay.addEventListener('click', () => renderer.domElement.requestPointerLock());
@@ -153,8 +248,8 @@
     addEventListener('mousemove', e => {
       if (!document.pointerLockElement) return;
       _up.copy(pos).normalize().negate();
-      forward.applyAxisAngle(_up, -e.movementX * MOUSE_SENS);
-      pitch = THREE.MathUtils.clamp(pitch - e.movementY * MOUSE_SENS, -Math.PI * 0.45, Math.PI * 0.45);
+      forward.applyAxisAngle(_up, -e.movementX * P.MOUSE_SENS);
+      pitch = THREE.MathUtils.clamp(pitch - e.movementY * P.MOUSE_SENS, -Math.PI * 0.45, Math.PI * 0.45);
     });
 
     addEventListener('resize', () => {
@@ -180,17 +275,17 @@
       if (keys.has('KeyS') || keys.has('ArrowDown')) _move.sub(forward);
       if (keys.has('KeyD') || keys.has('ArrowRight')) _move.add(_right);
       if (keys.has('KeyA') || keys.has('ArrowLeft')) _move.sub(_right);
-      if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), SPEED * dt);
+      if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), P.SPEED * dt);
 
       // прыжок: "притяжение" тянет обратно к стенке
       if (jumpH > 0 || jumpV > 0) {
-        jumpV -= GRAVITY * dt;
+        jumpV -= P.GRAVITY * dt;
         jumpH = Math.max(0, jumpH + jumpV * dt);
         if (jumpH === 0) jumpV = 0;
       }
 
       // держим игрока на сфере радиуса (R - EYE - jumpH) — это и есть "притяжение к внутренней поверхности"
-      pos.setLength(R - EYE - jumpH);
+      pos.setLength(P.R - P.EYE - jumpH);
 
       // камера: X = right, Y = up, Z = -forward, затем наклон по pitch
       camera.position.copy(pos);
@@ -199,7 +294,7 @@
       camera.rotateX(pitch);
 
       hud.textContent =
-        `R=${R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
+        `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
         `  |  высота над стенкой: ${jumpH.toFixed(2)}`;
 
       renderer.render(scene, camera);
