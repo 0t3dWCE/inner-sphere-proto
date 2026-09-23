@@ -8,7 +8,7 @@
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; }
     canvas { display: block; }
     #hud {
-      position: fixed; left: 12px; bottom: 12px; color: #fff; font-size: 13px; line-height: 1.5;
+      position: fixed; left: 12px; top: 12px; color: #fff; font-size: 13px; line-height: 1.5;
       background: rgba(0,0,0,.45); padding: 8px 12px; border-radius: 8px; pointer-events: none;
     }
     #overlay {
@@ -36,6 +36,16 @@
     }
     #settings input:focus { outline: 1px solid #63b3ed; }
     #settings .hint { margin-top: 6px; font-size: 11px; opacity: .65; }
+    #chat {
+      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 3; width: min(520px, 90vw);
+    }
+    #msg {
+      width: 100%; box-sizing: border-box; padding: 10px 14px; font-size: 15px; color: #fff;
+      background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.3); border-radius: 10px; outline: none;
+    }
+    #msg:focus { border-color: #63b3ed; background: rgba(0,0,0,.75); }
+    #msg::placeholder { color: rgba(255,255,255,.55); }
+    #chat .hint { text-align: center; color: #fff; font-size: 12px; opacity: .75; margin-top: 6px; text-shadow: 0 1px 2px #000; }
   </style>
   <script type="importmap">
     { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -49,9 +59,13 @@
     <div class="hint">Esc — отпустить мышь, чтобы редактировать. Значения сохраняются в браузере.</div>
   </div>
   <div id="crosshair"></div>
+  <form id="chat" autocomplete="off">
+    <input id="msg" maxlength="140" placeholder="Enter — написать сообщение" />
+    <div class="hint" id="chatHint">Enter — «слепить» шар из сообщения · клик — бросить туда, куда смотришь</div>
+  </form>
   <div id="overlay">
     Клик, чтобы начать
-    <small>WASD — ходьба · мышь — обзор · Space — прыжок · Esc — выйти из захвата мыши</small>
+    <small>WASD — ходьба · мышь — обзор · Space — прыжок · Enter — сообщение · Esc — выйти из захвата мыши</small>
   </div>
 
   <script type="module">
@@ -66,8 +80,9 @@
       ['JUMP_V',     'Скорость прыжка',       0,      50,   0.5],
       ['GRAVITY',    'Гравитация (к стенке)', 0.1,    100,  0.5],
       ['MOUSE_SENS', 'Чувствительность мыши', 0.0005, 0.01, 0.0005],
+      ['THROW_SPEED', 'Скорость броска',      5,      300,  5],
     ];
-    const DEFAULTS = { R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022 };
+    const DEFAULTS = { R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45 };
     const STORAGE_KEY = 'inner-sphere-params';
 
     function loadParams() {
@@ -196,9 +211,134 @@
     const keys = new Set();
     addEventListener('keydown', e => {
       if (isTyping(e)) return;
+      if (e.code === 'Enter') { e.preventDefault(); msgInput.focus(); return; }
       keys.add(e.code);
       if (e.code === 'Space' && jumpH === 0) jumpV = P.JUMP_V;
     });
+
+    // ---------- сообщения-шарики ----------
+    // Enter -> печатаем -> Enter: текст превращается в шар "в руке" (справа внизу, ~15% экрана).
+    // Клик: шар летит туда, куда смотрит камера, притягивается к стенке и, коснувшись её, становится табличкой.
+    const PLAYER_COLOR = new THREE.Color(palette[Math.floor(Math.random() * palette.length)]);
+    const BALL_R = 0.35;
+    const PLAQUE_W = 4, PLAQUE_H = 2;
+    const msgInput = document.getElementById('msg');
+    const chatHint = document.getElementById('chatHint');
+    let heldText = null;
+    const balls = [];    // { mesh, vel, text }
+    const plaques = [];  // { mesh, n } — поворачиваем к игроку каждый кадр
+
+    const ballMaterial = new THREE.MeshStandardMaterial({
+      color: PLAYER_COLOR, emissive: PLAYER_COLOR, emissiveIntensity: .2, roughness: .45,
+    });
+    // шар "в руке" — ребёнок камеры; при FOV 75 и дистанции 2 радиус 0.23 даёт ~15% высоты экрана
+    const heldBall = new THREE.Mesh(new THREE.SphereGeometry(0.23, 32, 16), ballMaterial);
+    heldBall.position.set(1.05, -0.5, -2);
+    heldBall.visible = false;
+    camera.add(heldBall);
+    scene.add(camera);   // иначе дети камеры не рендерятся
+
+    document.getElementById('chat').addEventListener('submit', e => {
+      e.preventDefault();
+      const text = msgInput.value.trim();
+      if (text) {
+        heldText = text;
+        heldBall.visible = true;
+        chatHint.textContent = `В руке: «${text}» — клик, чтобы бросить`;
+        msgInput.value = '';
+      }
+      msgInput.blur();
+    });
+
+    function throwBall() {
+      if (!heldText) return;
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 12), ballMaterial);
+      heldBall.getWorldPosition(mesh.position);
+      const vel = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(P.THROW_SPEED);
+      scene.add(mesh);
+      balls.push({ mesh, vel, text: heldText });
+      heldText = null;
+      heldBall.visible = false;
+      chatHint.textContent = 'Enter — «слепить» шар из сообщения · клик — бросить туда, куда смотришь';
+    }
+    // до канваса клик доходит только при захваченной мыши — иначе его перекрывает оверлей
+    renderer.domElement.addEventListener('mousedown', e => { if (e.button === 0) throwBall(); });
+
+    function wrapText(ctx, text, maxWidth) {
+      const lines = [];
+      for (const para of text.split('\n')) {
+        let line = '';
+        for (const word of para.split(' ')) {
+          const test = line ? line + ' ' + word : word;
+          if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = word; }
+          else line = test;
+        }
+        lines.push(line);
+      }
+      return lines;
+    }
+
+    function makePlaque(text) {
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 256;
+      const g = c.getContext('2d');
+      const frame = '#' + PLAYER_COLOR.getHexString();
+      g.fillStyle = 'rgba(20,20,28,.88)';
+      g.fillRect(0, 0, c.width, c.height);
+      g.lineWidth = 14;
+      g.strokeStyle = frame;
+      g.strokeRect(7, 7, c.width - 14, c.height - 14);
+      g.fillStyle = '#fff';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      let size = 40, lines;
+      do {                                      // подбираем кегль так, чтобы текст влез
+        g.font = `600 ${size}px system-ui, sans-serif`;
+        lines = wrapText(g, text, c.width - 60);
+        size -= 4;
+      } while (lines.length * size * 1.25 > c.height - 50 && size > 14);
+      const lh = size * 1.25 + 4;
+      const y0 = c.height / 2 - (lines.length - 1) * lh / 2;
+      lines.forEach((l, i) => g.fillText(l, c.width / 2, y0 + i * lh));
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      return new THREE.Mesh(
+        new THREE.PlaneGeometry(PLAQUE_W, PLAQUE_H),
+        new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })
+      );
+    }
+
+    function landBall(b) {
+      const n = b.mesh.position.clone().normalize();   // точка касания стенки
+      const plaque = makePlaque(b.text);
+      addProp(plaque, n, PLAQUE_H);                    // стоит на стенке, переезжает при смене радиуса
+      plaques.push({ mesh: plaque, n });
+      scene.remove(b.mesh);
+      b.mesh.geometry.dispose();
+    }
+
+    const _g = new THREE.Vector3(), _pu = new THREE.Vector3(), _pz = new THREE.Vector3(), _px = new THREE.Vector3();
+    function updateMessages(dt) {
+      for (let i = balls.length - 1; i >= 0; i--) {
+        const b = balls[i];
+        // притяжение к стенке: ускорение направлено от центра
+        _g.copy(b.mesh.position).normalize().multiplyScalar(P.GRAVITY);
+        b.vel.addScaledVector(_g, dt);
+        b.mesh.position.addScaledVector(b.vel, dt);
+        if (b.mesh.position.length() >= P.R - BALL_R) { landBall(b); balls.splice(i, 1); }
+      }
+      // таблички: стоят на стенке (Y = к центру), лицевой стороной (+Z) к игроку
+      for (const p of plaques) {
+        _pu.copy(p.n).negate();
+        _pz.copy(pos).sub(p.mesh.position);
+        _pz.addScaledVector(_pu, -_pz.dot(_pu));
+        if (_pz.lengthSq() < 1e-6) continue;
+        _pz.normalize();
+        _px.crossVectors(_pu, _pz);
+        p.mesh.quaternion.setFromRotationMatrix(_m.makeBasis(_px, _pu, _pz));
+      }
+    }
     addEventListener('keyup', e => keys.delete(e.code));
     addEventListener('blur', () => keys.clear());
 
@@ -293,9 +433,11 @@
       camera.quaternion.setFromRotationMatrix(_m);
       camera.rotateX(pitch);
 
+      updateMessages(dt);
+
       hud.textContent =
         `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
-        `  |  высота над стенкой: ${jumpH.toFixed(2)}`;
+        `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}`;
 
       renderer.render(scene, camera);
       requestAnimationFrame(tick);
