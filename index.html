@@ -544,8 +544,65 @@
       return { dir, tan, s: 0, travelled: 0, trail, camels };
     })();
 
+    // ---------- погонщики ----------
+    // 3–4 человека идут рядом с караваном по обе стороны и "гуляют" вдоль него вперёд-назад:
+    // их продольное смещение колеблется по синусу, скорость складывается со скоростью каравана.
+    const HERDER_ROBES = [0x3b4a8c, 0xb7442c, 0xe8e2d0, 0x6b8e4e, 0x8c6239];
+    const HERDER_TURBANS = [0xf2e9d8, 0xd9a441, 0x2f2f2f, 0xc0392b, 0xffffff];
+
+    function makeHerder(robeColor, turbanColor) {
+      const g = new THREE.Group();
+      const robe = fogify(new THREE.MeshStandardMaterial({ color: robeColor, roughness: .95, flatShading: true }));
+      const skin = fogify(new THREE.MeshStandardMaterial({ color: 0x8d5a3b, roughness: .9, flatShading: true }));
+      const cloth = fogify(new THREE.MeshStandardMaterial({ color: turbanColor, roughness: .95, flatShading: true }));
+      const wood = fogify(new THREE.MeshStandardMaterial({ color: 0x5a3d22, roughness: 1 }));
+      // модель: +Z — вперёд, начало координат — на земле; рост ~1.75
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 1.05, 7), robe);
+      body.position.y = 0.85;
+      const head = new THREE.Group();
+      head.position.y = 1.55;
+      const face = new THREE.Mesh(new THREE.SphereGeometry(0.15, 7, 6), skin);
+      const turban = new THREE.Mesh(new THREE.SphereGeometry(0.19, 7, 5), cloth);
+      turban.position.y = 0.08; turban.scale.set(1, 0.6, 1);
+      head.add(face, turban);
+      // ноги — pivot у бедра (виднеются из-под халата)
+      const legGeo = new THREE.BoxGeometry(0.12, 0.6, 0.14); legGeo.translate(0, -0.3, 0);
+      const legL = new THREE.Mesh(legGeo, skin); legL.position.set(-0.09, 0.6, 0);
+      const legR = new THREE.Mesh(legGeo, skin); legR.position.set(0.09, 0.6, 0);
+      // руки — pivot у плеча; в правой — посох
+      const armGeo = new THREE.BoxGeometry(0.1, 0.62, 0.1); armGeo.translate(0, -0.31, 0);
+      const armL = new THREE.Mesh(armGeo, robe); armL.position.set(-0.28, 1.35, 0);
+      const armR = new THREE.Mesh(armGeo, robe); armR.position.set(0.28, 1.35, 0);
+      const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.9, 5), wood);
+      staff.position.set(0.05, -0.55 + 0.35, 0.05);   // хват примерно посередине посоха
+      armR.add(staff);
+      g.add(body, head, legL, legR, armL, armR);
+      return { group: g, body, head, legL, legR, armL, armR };
+    }
+
+    caravan.herders = (() => {
+      const n = 3 + Math.floor(Math.random() * 2);      // 3..4
+      const camelLen = (caravan.camels.length - 1) * CAMEL_SPACING;   // длина цепочки, м
+      const list = [];
+      for (let i = 0; i < n; i++) {
+        const h = makeHerder(
+          HERDER_ROBES[Math.floor(Math.random() * HERDER_ROBES.length)],
+          HERDER_TURBANS[Math.floor(Math.random() * HERDER_TURBANS.length)]
+        );
+        h.side = i % 2 === 0 ? 1 : -1;                    // чередуем стороны
+        h.lateral = 2.2 + Math.random() * 0.8;            // метров от оси каравана
+        h.phase = Math.random() * Math.PI * 2;
+        h.wanderAmp = Math.max(1.5, camelLen / 2 + 1.5);  // размах прогулки вдоль каравана, м
+        h.wanderW = (1.6 / h.wanderAmp) * (0.8 + Math.random() * 0.4);   // ~пик 1.6 м/с относительно каравана
+        h.gaitPhase = Math.random() * Math.PI * 2;
+        h.group.scale.setScalar(0.95 + Math.random() * 0.12);
+        scene.add(h.group);
+        list.push(h);
+      }
+      return list;
+    })();
+
     // положение на следе по накопленному углу s (slerp между соседними отметками)
-    const _ta = new THREE.Vector3(), _tb = new THREE.Vector3();
     function trailDir(s, out) {
       const t = caravan.trail;
       if (s <= t[0].s) return out.copy(t[0].dir);
@@ -559,7 +616,18 @@
       return out.copy(t[t.length - 1].dir);
     }
 
-    const _cd = new THREE.Vector3(), _cf = new THREE.Vector3(), _cu = new THREE.Vector3(), _cr = new THREE.Vector3(), _axis = new THREE.Vector3();
+    // базис в точке следа s: _cd — направление на точку, _cu — "верх" (к центру), _cf — вперёд по следу, _cr — вправо
+    const _cd = new THREE.Vector3(), _cf = new THREE.Vector3(), _cu = new THREE.Vector3(), _cr = new THREE.Vector3(), _hd = new THREE.Vector3();
+    function trailFrame(s) {
+      trailDir(s, _cd);
+      trailDir(s + 0.01, _cf);
+      _cu.copy(_cd).negate();
+      _cf.sub(_cd).addScaledVector(_cu, -_cf.dot(_cu));
+      if (_cf.lengthSq() < 1e-10) _cf.copy(caravan.tan);
+      _cf.normalize();
+      _cr.crossVectors(_cu, _cf);
+    }
+
     function updateCaravan(dt) {
       const cv = caravan, R = P.R;
       // вожак: шаг по большому кругу в плоскости (dir, tan)
@@ -587,15 +655,7 @@
       const t = clock.elapsedTime;
       const spacing = CAMEL_SPACING / R;
       cv.camels.forEach((c, i) => {
-        const s = cv.s - i * spacing;
-        trailDir(s, _cd);
-        trailDir(s + 0.01, _cf);
-        // базис: Y — к центру, Z — вперёд по следу, X — вправо
-        _cu.copy(_cd).negate();
-        _cf.sub(_cd).addScaledVector(_cu, -_cf.dot(_cu));
-        if (_cf.lengthSq() < 1e-10) _cf.copy(cv.tan);
-        _cf.normalize();
-        _cr.crossVectors(_cu, _cf);
+        trailFrame(cv.s - i * spacing);
         c.group.position.copy(_cd).multiplyScalar(R - 0.03);
         c.group.quaternion.setFromRotationMatrix(_m.makeBasis(_cr, _cu, _cf));
 
@@ -610,6 +670,39 @@
         c.tail.rotation.x = Math.sin(ph * 0.7 + 2) * 0.25;
         c.body.position.y = 1.5 + Math.abs(Math.sin(ph)) * 0.04;
       });
+
+      // погонщики: точка на следе = середина цепочки + прогулка по синусу; сдвиг вбок по _cr
+      const camelLen = (cv.camels.length - 1) * CAMEL_SPACING;
+      for (const h of cv.herders) {
+        const wander = Math.sin(t * h.wanderW + h.phase) * h.wanderAmp;            // м, вдоль каравана
+        const wanderV = Math.cos(t * h.wanderW + h.phase) * h.wanderAmp * h.wanderW; // м/с относительно каравана
+        trailFrame(cv.s + (-camelLen / 2 + wander) / R);
+        const a = h.side * h.lateral / R;                                            // боковой сдвиг как угол
+        _hd.copy(_cd).multiplyScalar(Math.cos(a)).addScaledVector(_cr, Math.sin(a)).normalize();
+        _cu.copy(_hd).negate();
+        _cf.addScaledVector(_cu, -_cf.dot(_cu)).normalize();
+        // идёт вперёд, но корпус чуть доворачивает в сторону, куда сейчас смещается вдоль каравана
+        const speed = P.CAMEL_SPEED + wanderV;
+        const yaw = THREE.MathUtils.clamp(-h.side * wanderV * 0.18, -0.35, 0.35);
+        if (speed < 0) _cf.negate();                                                  // если караван стоит — разворачивается
+        _cf.applyAxisAngle(_cu, yaw).normalize();
+        _cr.crossVectors(_cu, _cf);
+        h.group.position.copy(_hd).multiplyScalar(R - 0.02);
+        h.group.quaternion.setFromRotationMatrix(_m.makeBasis(_cr, _cu, _cf));
+
+        // походка: ноги в противофазе, руки — противоположно ногам, темп от фактической скорости
+        const sp = Math.abs(speed);
+        const w = 3.2 + sp * 1.6;
+        const ph = t * w + h.gaitPhase;
+        const amp = Math.min(0.55, 0.12 + sp * 0.16);
+        h.legL.rotation.x = Math.sin(ph) * amp;
+        h.legR.rotation.x = -Math.sin(ph) * amp;
+        h.armL.rotation.x = -Math.sin(ph) * amp * 0.7;
+        h.armR.rotation.x = Math.sin(ph) * amp * 0.35;         // рука с посохом машет меньше
+        h.head.rotation.y = Math.sin(t * 0.7 + h.phase) * 0.4 - h.side * 0.25;   // поглядывает на верблюдов
+        h.head.rotation.x = Math.sin(ph * 2) * 0.03;
+        h.body.position.y = 0.85 + Math.abs(Math.sin(ph)) * 0.03;
+      }
     }
     addEventListener('keyup', e => keys.delete(e.code));
     addEventListener('blur', () => keys.clear());
