@@ -5,9 +5,10 @@ import { P, roomState } from './params.js';
 import { camera } from './scene.js';
 import { townDir, townToDir, dirToTown, biomeAt, BIOME, bioAxis, bioE1, bioE2, lakeDir, BAND, LAKE_R, TOWN_H } from './world.js';
 import { terrainH, surfaceR } from './terrain.js';
-import { townObstacles } from './town.js';
+import { townObstacles, houses, townPlatforms, houseLocalToTown } from './town.js';
 import { trees } from './forest.js';
-import { setPitch } from './player.js';
+import { setPitch, keys } from './player.js';
+import { house, debugEnter, debugExit } from './house.js';
 import { audio, initAudio } from './audio.js';
 import { caravan, worldT0 } from './caravan.js';
 import { net } from './net.js';
@@ -20,7 +21,7 @@ export function installDebug() {
   window.dbg = {
     P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
     biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED, roomState, isOwner, setParam,
-    player,
+    player, houses, townPlatforms, house, keys, debugEnter, debugExit,
     get worldT0() { return worldT0; },
     get audio() { return audio; },
     get playerBiome() { return player.biome; },
@@ -46,6 +47,16 @@ export function installDebug() {
       const d = townToDir(0, -dist, new THREE.Vector3());
       pos.copy(d).multiplyScalar(P.R - P.EYE);
       forward.copy(townDir).sub(d);
+    },
+    // встать перед дверью дома idx (в 1.2 м от фасада), лицом к двери
+    goToDoor(idx = 0) {
+      const h = houses[idx];
+      const tp = houseLocalToTown(h, h.doorX, h.d / 2 + 1.2, new THREE.Vector2());
+      const d = townToDir(tp.x, tp.y, new THREE.Vector3());
+      pos.copy(d).multiplyScalar(P.R - P.EYE);
+      const tc = houseLocalToTown(h, h.doorX, 0, new THREE.Vector2());
+      forward.copy(townToDir(tc.x, tc.y, new THREE.Vector3())).sub(d);
+      player.jumpH = 0; player.jumpV = 0;
     },
     // встать в 12 м позади каравана лицом к нему
     goToCaravan() {
