@@ -16,6 +16,7 @@ const PLAQUE_W = 4, PLAQUE_H = 2;
 const msgInput = document.getElementById('msg');
 const chatHint = document.getElementById('chatHint');
 let heldText = null;
+export const holding = () => heldText !== null;   // шар в руке — клик бросает его, а не стреляет (bow.js)
 const balls = [];           // { mesh, vel, text, remote }
 export const plaques = [];  // { mesh, n, rec } — поворачиваем к игроку каждый кадр; HUD показывает их число
 const plaqueIds = new Set();   // реестр табличек по id — множество только растёт, слияние с сетью без конфликтов

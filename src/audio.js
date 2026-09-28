@@ -106,6 +106,29 @@ export function sfxThud(gain) {
   src.connect(f).connect(g).connect(bus);
   src.start(t); src.stop(t + 0.16);
 }
+// щелчок тетивы: короткий шумовой удар + быстро затухающая струна (bow.js)
+export function sfxTwang() {
+  const { ctx, bus, noise } = audio, t = ctx.currentTime;
+  const src = ctx.createBufferSource();
+  src.buffer = noise;
+  const f = ctx.createBiquadFilter();
+  f.type = 'bandpass'; f.frequency.value = 1800; f.Q.value = 1.2;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.35, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0004, t + 0.09);
+  src.connect(f).connect(g).connect(bus);
+  src.start(t); src.stop(t + 0.1);
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(220, t);
+  o.frequency.exponentialRampToValueAtTime(140, t + 0.25);
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(0.18, t);
+  og.gain.exponentialRampToValueAtTime(0.0004, t + 0.3);
+  o.connect(og).connect(bus);
+  o.start(t); o.stop(t + 0.32);
+}
 export function sfxGrunt() {
   const { ctx, bus } = audio, t = ctx.currentTime;
   const o = ctx.createOscillator();

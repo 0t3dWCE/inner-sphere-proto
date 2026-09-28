@@ -12,6 +12,7 @@ export const SCHEMA = [
   ['GRAVITY',    'Гравитация (к стенке)', 0.1,    100,  0.5],
   ['MOUSE_SENS', 'Чувствительность мыши', 0.0005, 0.01, 0.0005],
   ['THROW_SPEED', 'Скорость броска',      5,      300,  5],
+  ['ARROW_SPEED', 'Скорость стрелы',      10,     300,  5],
   ['FOW',        'Туман войны (0/1)',     0,      1,    1],
   ['FOW_R',      'Радиус видимости (×R)', 0.1,    1.5,  0.05],
   ['FOW_MEMORY', 'Яркость разведанного',  0,      1,    0.05],
@@ -27,7 +28,7 @@ export const SCHEMA = [
   ['TERRAIN_H',  'Рельеф: высота холмов (м)', 0,  20,   0.5],
 ];
 export const DEFAULTS = {
-  R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45,
+  R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45, ARROW_SPEED: 60,
   FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35, CAMEL_SPEED: 2.5, TAME_T: 45, RIDE_BONUS: 10, SOUND_R: 25, VOLUME: 0.6,
   SKY_H: 30, SKY_CLOUDS: 0.5, HAZE: 110, AMBIENCE: 1, TERRAIN_H: 5,
 };

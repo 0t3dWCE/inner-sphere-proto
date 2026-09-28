@@ -21,8 +21,9 @@
 | `town.js` | Дома, стена, ворота, башни: `buildTown()`, AABB-препятствия; метаданные домов `houses[]` (размеры, поворот, дверь, балконы) и площадки балконов `townPlatforms[]`, на которых можно стоять. | `townObstacles, houses, townPlatforms, buildTown, houseLocalToTown, houseDoorNear, townPlatformAt` |
 | `house.js` | Интерьеры: отдельная сцена `houseScene` с плоским полом, генератор дома из seed+номер (этажи, лестница, перегородки, мебель, обои, «особенность»), контроллер ходьбы внутри (перехватывает управление через `setPlayerOverride`), вход/выход через дверь и балконы (`onSpace`). | `houseScene, house {active, hint}, updateHouse, debugEnter, debugExit` |
 | `player.js` | Ввод (клавиатура, мышь), ходьба, прыжок, коллизии с городом и ёлками, удержание на рельефе и на балконных площадках, камера. Пишет `state.player`. Точки расширения: `onSpace(fn)` — перехват пробела, `setPlayerOverride({update, mouse, jump})` — отдать управление другому контроллеру. | `updatePlayer, setPitch, onSpace, setPlayerOverride, keys, townXZ, nearTown, platform` |
-| `messages.js` | Шары-сообщения и таблички (G-Set), форма чата, бросок по клику, сеть: `ball`, `plaque`, поле `plaques` в `hello`. | `plaques, loadPlaques, updateMessages` |
-| `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt` |
+| `messages.js` | Шары-сообщения и таблички (G-Set), форма чата, бросок по клику, сеть: `ball`, `plaque`, поле `plaques` в `hello`. `holding()` — шар в руке (тогда клик бросает, а не стреляет). | `plaques, holding, loadPlaques, updateMessages` |
+| `bow.js` | Лук в лесу (место из seed'а, свой RNG), подбор вплотную (запоминается в localStorage комнаты), лук в руке (ребёнок камеры), стрелы: клик без шара → полёт по дуге (`P.ARROW_SPEED`, `P.GRAVITY`), след, втыкание в землю (остаются, FIFO 300); сеть: `arrow {p, v, color}`. | `bow {have, hint, dir}, arrows, buildBow, updateBow` |
+| `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`), тетива (`sfxTwang`). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt, sfxTwang` |
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
 | `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`; сеть: поле `t0` в `hello`. `camelSlotDir(i)` — где сейчас место верблюда `i` в цепочке. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldT0 (live)` |
 | `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. | `ride {camel, target, progress, hint}, camelRider, updateRide` |
@@ -39,11 +40,12 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & caravan & messages & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience
-  ui --> roomsync & net & caravan & messages & house & ride & audio & terrain & fow & world & params & state
-  debug --> ui & roomsync & net & caravan & audio & house & ride & player & forest & town & terrain & world & params & state
+  main --> ui & debug & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience
+  ui --> roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
+  debug --> ui & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
   house --> ride & player & town & world & scene & params & state
   ride --> caravan & net & terrain & params & state
+  bow --> messages & audio & net & forest & terrain & world & fow & scene & params & state
   roomsync --> net & terrain & params & state
   caravan --> net & audio & props & terrain & world & fow & scene & params & state
   messages --> net & props & terrain & fow & scene & params & state
@@ -64,7 +66,7 @@ flowchart TD
 ```
 
 Слои сверху вниз: **оркестрация** (`main`, `debug`) → **UI и сетевые надстройки** (`ui`, `roomsync`) →
-**игровая логика** (`player`, `house`, `ride`, `messages`, `caravan`, `ambience`) → **транспорт и звук** (`net`, `audio`) →
+**игровая логика** (`player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`) → **транспорт и звук** (`net`, `audio`) →
 **мир** (`town`, `forest`, `props`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
 
 ## Состояние: кто владеет, кто пишет
@@ -76,6 +78,7 @@ flowchart TD
 | `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside, rideH, speedBonus}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `ride` (`rideH`, `speedBonus` при посадке/спуске), `debug` (телепорт) | `net` (флаг `in`, `j = jumpH + rideH` в `pos`), `fow`, `messages` (внутри не бросаем), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
 | `house.active {h, it, pos, yaw, pitch, vy, grounded}`, `house.hint` | `house` | `house` (контроллер) | `ui` (HUD), `debug` |
 | `ride {camel, target, progress, hint}`, `caravan.camels[i].st {rider, away, dir, seen}` | `ride` | `ride` (кадр, клавиша E, сеть) | `ui` (полоска приручения, HUD), `house` (не пускать верхом), `debug` |
+| `bow {have, hint, dir}`, `arrows {flying, stuck}` | `bow` | `bow` (подбор, клик, сеть, localStorage) | `ui` (HUD), `debug` |
 | `houses[]`, `townPlatforms[]` | `town` | `town` при сборке | `house` (интерьер, точки выхода), `player` (стоять на балконе), `debug` |
 | `fowUniforms` (в т.ч. `uPlayerDir`, `uTime`) | `fow` | `fow.updateFow` | все материалы, `ambience`, `ui` (HUD) |
 | `props[]`, `townObjects[]`, `trees[]` | `props`, `town`, `forest` | свои модули при сборке | `terrain.applyRadius` через `radiusListeners`, `player` (коллизии) |
@@ -101,10 +104,11 @@ flowchart TD
 5. `buildTown()` — дома, стена, ворота
 6. `applyRadius()` — геометрия стенки и воды под текущие `R`/`TERRAIN_H`, расстановка всего через `radiusListeners`
 7. `buildCaravan()` — верблюды и погонщики
-8. `loadPlaques()` — таблички комнаты из localStorage
-9. `netStart()` — занять слот PeerJS, соединиться
-10. `installDebug()` — `window.dbg` при `?debug`
-11. `tick()`
+8. `buildBow()` — лук в лесу (свой RNG, `rand()` не тратит; нужны `trees`, чтобы не лечь в ствол)
+9. `loadPlaques()` — таблички комнаты из localStorage
+10. `netStart()` — занять слот PeerJS, соединиться
+11. `installDebug()` — `window.dbg` при `?debug`
+12. `tick()`
 
 Проверка эквивалентности после нарезки: старая (монолитная) и новая версии в одной комнате дают побитово
 одинаковые `townDir`, все 750 ёлок, 60 препятствий, параметры верблюдов и погонщиков, рельеф и биомы;
@@ -122,6 +126,8 @@ updatePlayer(dt)         player     базис (up = −normalize(pos), forward 
 updateHouse()            house      подсказка «пробел — войти/выйти» (у двери, на балконе снаружи; у выходов внутри)
 updateMessages(dt)       messages   шары: гравитация от центра, приземление → landBall → табличка (+ сеть);
                                     таблички поворачиваются к игроку
+updateBow(dt)            bow        лук в лесу (покачивание, подбор в 1,8 м), стрелы: gravity к стенке, нос по скорости,
+                                    след по скорости, наконечник достиг surfaceR → воткнулась (в stuck, FIFO 300)
 updateCaravan()          caravan    догнать worldTime() шагами по 50 мс (stepCaravan — детерминированно),
                                     поставить верблюдов по следу, погонщиков сбоку, анимация, колокольчики/шаги/ворчание
 updateAmbience()         ambience   громкость шин леса/города, планирование птиц, зверей, музыки, кухни
@@ -182,6 +188,24 @@ renderer.render(player.inside ? houseScene : scene, camera)
 - **Детерминизм.** Караван по-прежнему симулируется по мировому времени; состояние седла — только сетевое, `rand()`
   не тратится. Верблюдов в караване 5–7 (комната — до 5 игроков, каждому хватит).
 
+## Лук и стрелы (`bow.js`)
+
+- **Где лежит.** `buildBow()` — rejection sampling своим RNG `mulberry32(WORLD_SEED ^ hash32('bow'))`: биом лес, не ближе
+  40 м к старту, не ближе 1,5 м к стволу. Стоит над землёй, покачивается и вращается, над ним столб мягкого света
+  (additive) — среди ёлок иначе не найти. У всех в комнате лук в одной точке.
+- **Подбор.** В 1,8 м по дуге (не в доме) — `bow.have = true`, лук появляется в левой руке (ребёнок камеры, в доме не
+  рендерится, т.к. `houseScene`), находка пишется в `localStorage` (`inner-sphere-bow-<room|solo>`). У каждого игрока
+  свой экземпляр: лук в лесу остаётся для остальных. Подсказка «Лук!» — в 12 м.
+- **Клик.** `mousedown` на канвасе с `capture: true` — проверить `messages.holding()` **до** того, как `messages.js`
+  бросит шар и опустошит руку; иначе один клик и бросал бы, и стрелял. Стреляем, если лук есть, шара нет, не в доме,
+  прошло ≥ 0,35 с. Стрела: из точки камеры +0,8 м по взгляду, `v = dir · P.ARROW_SPEED`, `sfxTwang`, `arrow` в сеть.
+- **Полёт.** Как у шаров: `vel += normalize(pos) · P.GRAVITY · dt`, нос по скорости, след — усечённый конус за
+  хвостовиком длиной `min(4, |v|·0.05)`. Внутри сферы «ровный» выстрел падает быстро (стенка сама загибается навстречу):
+  при 60 м/с и R=80 — 0° ≈ 12 м, 20° ≈ 30 м, 45° ≈ 90 м, 77° ≈ 150 м; до антипода (250 м) не долетает.
+- **Приземление.** Когда радиальная координата наконечника ≥ `surfaceR(dir)`: стрела сдвигается назад по своему
+  направлению так, чтобы наконечник ушёл в землю на ~0,25 м, след гасится, стрела переходит в `stuck` (FIFO 300, старые
+  убираются). Стрелы не переставляются при смене `R` (эфемерны) и не сохраняются между сессиями.
+
 ## Сеть: шина в `net.js`
 
 `net.js` знает только про слоты, соединения, `hello`-базу (id, имя, цвет) и `pos`. Остальное — подписки:
@@ -191,6 +215,7 @@ renderer.render(player.inside ? houseScene : scene, camera)
 | `messages` | `plaques` (весь G-Set) | — | `hello` (слияние табличек), `ball`, `plaque` |
 | `caravan` | `t0` | — | `hello` (переход на более ранний `worldT0`) |
 | `ride` | `camel` | `c` | `hello` (`camel`), `camel` |
+| `bow` | — | — | `arrow` (`{p, v, color}` → своя копия стрелы в полёте) |
 | `roomsync` | `room` (LWW-регистр) | — | `hello` (`room`), `params` |
 | `ui` | — | — | `onNetChange` → перерисовать блок сети |
 

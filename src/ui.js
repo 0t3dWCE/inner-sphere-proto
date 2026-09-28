@@ -13,6 +13,7 @@ import { net, onNetChange, sendHello } from './net.js';
 import { isOwner, ownerName, publishRoomParams, onRoomChange } from './roomsync.js';
 import { house } from './house.js';
 import { ride } from './ride.js';
+import { bow } from './bow.js';
 
 // ---------- панель параметров ----------
 const form = document.getElementById('params');
@@ -149,6 +150,7 @@ export function updateHud(fowOn) {
   hud.textContent =
     (ride.hint ? `${ride.hint}  |  ` : '') +
     (house.hint ? `${house.hint}  |  ` : '') +
+    (bow.hint ? `${bow.hint}  |  ` : '') +
     `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
     `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}` +
     (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '') +

@@ -16,6 +16,7 @@ import { buildTown } from './town.js';
 import { updatePlayer } from './player.js';
 import { houseScene, updateHouse } from './house.js';
 import { loadPlaques, updateMessages } from './messages.js';
+import { buildBow, updateBow } from './bow.js';
 import { buildCaravan, updateCaravan } from './caravan.js';
 import { updateAmbience } from './ambience.js';
 import { netStart, updateNet } from './net.js';
@@ -31,6 +32,7 @@ buildProps();       // цветные коробки и маяки
 buildTown();        // дома, стена, ворота
 applyRadius();      // геометрия стенки/воды под текущие R и TERRAIN_H, расстановка всего на поверхности
 buildCaravan();     // верблюды и погонщики
+buildBow();         // лук в лесу (свой RNG, rand() мира не тратит; нужны ёлки — после buildForest)
 loadPlaques();      // таблички комнаты из localStorage
 netStart();         // PeerJS: занять слот, соединиться с остальными
 installDebug();     // window.dbg при ?debug
@@ -42,6 +44,7 @@ function tick() {
   updatePlayer(dt);       // ввод, ходьба, коллизии, биом под ногами, прыжок, рельеф, камера (внутри дома — контроллер house.js)
   updateHouse();          // подсказка «пробел — войти/выйти» у дверей и балконов
   updateMessages(dt);     // полёт шаров, приземление в таблички, поворот табличек к игроку
+  updateBow(dt);          // лук в лесу (подобрать), полёт стрел по дуге, втыкание в землю
   updateCaravan();        // догнать мировое время, расставить верблюдов/погонщиков, анимация, звук
   updateAmbience();       // лес/город: громкость шин, планирование птиц, музыки, кухни
   updateNet(dt);          // своя позиция ~12 Гц, интерполяция чужих аватаров
