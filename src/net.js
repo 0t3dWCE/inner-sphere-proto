@@ -24,6 +24,8 @@ const handlers = new Map();          // тип сообщения -> [fn(msg, sl
 export function onNet(type, fn) { if (!handlers.has(type)) handlers.set(type, []); handlers.get(type).push(fn); }
 const helloFields = [];              // [fn() -> объект], сливаются в hello
 export function addHelloFields(fn) { helloFields.push(fn); }
+const posFields = [];                // [fn() -> объект], сливаются в pos (12 Гц; держать маленькими)
+export function addPosFields(fn) { posFields.push(fn); }
 const changeListeners = [];          // UI: перерисовать блок сети при любом изменении статуса/состава
 export function onNetChange(fn) { changeListeners.push(fn); }
 
@@ -151,6 +153,7 @@ function onNetData(slot, m) {
     r.target.fromArray(m.p);
     r.tfwd.fromArray(m.f);
     r.jump = m.j || 0;
+    r.last = m;                                          // последний pos целиком — для полей других модулей (addPosFields)
     if (!r.pos) { r.pos = r.target.clone(); r.fwd.copy(r.tfwd); }
     r.group.visible = !m.in;                            // игрок внутри дома — аватар в мире скрыт
     return;
@@ -167,7 +170,8 @@ export function updateNet(dt) {
   netAcc += dt;
   if (netAcc >= 1 / POS_HZ && net.conns.size) {
     netAcc = 0;
-    netBroadcast({ t: 'pos', p: player.pos.toArray(), f: player.forward.toArray(), j: player.jumpH, in: player.inside ? 1 : 0 });
+    netBroadcast(Object.assign({ t: 'pos', p: player.pos.toArray(), f: player.forward.toArray(), j: player.jumpH + player.rideH, in: player.inside ? 1 : 0 },
+      ...posFields.map(f => f())));
   }
   const k = 1 - Math.exp(-dt * 12);
   for (const r of net.remotes.values()) {

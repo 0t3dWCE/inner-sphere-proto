@@ -24,8 +24,9 @@
 | `messages.js` | Шары-сообщения и таблички (G-Set), форма чата, бросок по клику, сеть: `ball`, `plaque`, поле `plaques` в `hello`. | `plaques, loadPlaques, updateMessages` |
 | `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt` |
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
-| `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`; сеть: поле `t0` в `hello`. | `caravan, buildCaravan, updateCaravan, worldT0 (live)` |
-| `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, onNetChange, updateNet` |
+| `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`; сеть: поле `t0` в `hello`. `camelSlotDir(i)` — где сейчас место верблюда `i` в цепочке. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldT0 (live)` |
+| `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. | `ride {camel, target, progress, hint}, camelRider, updateRide` |
+| `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `addPosFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. У каждого remote хранится последний `pos` целиком (`r.last`) — для полей других модулей. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, addPosFields, onNetChange, updateNet` |
 | `roomsync.js` | Владелец комнаты и общие параметры: `isOwner`, `publishRoomParams`, приём `params`/`hello.room`, хук `onRoomChange`. | `isOwner, ownerName, publishRoomParams, onRoomChange` |
 | `ui.js` | Весь DOM: панель параметров (`setParam`, блокировка у не-владельцев), блок сети, оверлей/захват мыши, HUD. | `setParam, updateHud` |
 | `debug.js` | `window.dbg` при `?debug`: телепорты, доступ к состоянию. | `installDebug` |
@@ -38,10 +39,11 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & caravan & messages & net & roomsync & house & player & town & forest & props & sky & terrain & ambience
-  ui --> roomsync & net & caravan & messages & house & audio & terrain & fow & world & params & state
-  debug --> ui & roomsync & net & caravan & audio & house & player & forest & town & terrain & world & params & state
-  house --> player & town & world & scene & params & state
+  main --> ui & debug & caravan & messages & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience
+  ui --> roomsync & net & caravan & messages & house & ride & audio & terrain & fow & world & params & state
+  debug --> ui & roomsync & net & caravan & audio & house & ride & player & forest & town & terrain & world & params & state
+  house --> ride & player & town & world & scene & params & state
+  ride --> caravan & net & terrain & params & state
   roomsync --> net & terrain & params & state
   caravan --> net & audio & props & terrain & world & fow & scene & params & state
   messages --> net & props & terrain & fow & scene & params & state
@@ -62,7 +64,7 @@ flowchart TD
 ```
 
 Слои сверху вниз: **оркестрация** (`main`, `debug`) → **UI и сетевые надстройки** (`ui`, `roomsync`) →
-**игровая логика** (`player`, `house`, `messages`, `caravan`, `ambience`) → **транспорт и звук** (`net`, `audio`) →
+**игровая логика** (`player`, `house`, `ride`, `messages`, `caravan`, `ambience`) → **транспорт и звук** (`net`, `audio`) →
 **мир** (`town`, `forest`, `props`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
 
 ## Состояние: кто владеет, кто пишет
@@ -71,8 +73,9 @@ flowchart TD
 |---|---|---|---|
 | `P` — параметры | `params` | `ui.setParam`, `roomsync` (применяет чужие), `params` (загрузка) | все, каждый кадр |
 | `roomState {ver, owner, values}` | `params` | `roomsync`, `ui` (создание комнаты — в localStorage) | `roomsync`, `ui`, `debug` |
-| `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `debug` (телепорт) | `net` (флаг `in` в `pos`), `fow`, `messages` (внутри не бросаем), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
+| `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside, rideH, speedBonus}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `ride` (`rideH`, `speedBonus` при посадке/спуске), `debug` (телепорт) | `net` (флаг `in`, `j = jumpH + rideH` в `pos`), `fow`, `messages` (внутри не бросаем), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
 | `house.active {h, it, pos, yaw, pitch, vy, grounded}`, `house.hint` | `house` | `house` (контроллер) | `ui` (HUD), `debug` |
+| `ride {camel, target, progress, hint}`, `caravan.camels[i].st {rider, away, dir, seen}` | `ride` | `ride` (кадр, клавиша E, сеть) | `ui` (полоска приручения, HUD), `house` (не пускать верхом), `debug` |
 | `houses[]`, `townPlatforms[]` | `town` | `town` при сборке | `house` (интерьер, точки выхода), `player` (стоять на балконе), `debug` |
 | `fowUniforms` (в т.ч. `uPlayerDir`, `uTime`) | `fow` | `fow.updateFow` | все материалы, `ambience`, `ui` (HUD) |
 | `props[]`, `townObjects[]`, `trees[]` | `props`, `town`, `forest` | свои модули при сборке | `terrain.applyRadius` через `radiusListeners`, `player` (коллизии) |
@@ -123,10 +126,13 @@ updateCaravan()          caravan    догнать worldTime() шагами по
                                     поставить верблюдов по следу, погонщиков сбоку, анимация, колокольчики/шаги/ворчание
 updateAmbience()         ambience   громкость шин леса/города, планирование птиц, зверей, музыки, кухни
 updateNet(dt)            net        своя pos ~12 Гц; чужие аватары — интерполяция и постановка на поверхность
+updateRide(dt)           ride       приручение (progress ± dt), свой верблюд под ногами, чужие седоки (по r.last.c под
+                                    их аватаром), пропавший седок → 'back', возвращение отпущенных к camelSlotDir(i).
+                                    Стоит после updateCaravan (тот ставит всех верблюдов в цепочку) и updateNet (нужны свежие r.pos)
 updateSky()              sky        радиус R − SKY_H, облачность
 updateFow(elapsed)       fow        дымка (fog.near/far), униформы тумана войны, uPlayerDir, отметка разведанного,
                                     процент разведки раз в 60 кадров → возвращает fowOn
-updateHud(fowOn)         ui         строка HUD (внутри дома — номер дома, этаж, размер, подсказка)
+updateHud(fowOn)         ui         строка HUD (внутри дома — номер дома, этаж, размер, подсказка), полоска приручения #tame
 renderer.render(player.inside ? houseScene : scene, camera)
 ```
 
@@ -157,16 +163,36 @@ renderer.render(player.inside ? houseScene : scene, camera)
 Порядок важен в двух местах: `updateAmbience` и `updateHud` читают `fowUniforms.uPlayerDir` — у ambience это
 значение предыдущего кадра (как и было в монолите), у HUD — уже текущее.
 
+## Верблюд под седлом (`ride.js`)
+
+- **Приручение.** Каждый кадр ищется ближайший верблюд *цепочки* (`st.away === null`) в 2,8 м по дуге. Пока он есть —
+  `ride.progress += dt` (полоска `#tame` в `ui`), отошёл — `−3·dt`. `progress ≥ P.TAME_T` → `mount(i)`.
+- **Посадка.** `st = {rider: ME.id, away: 'ride'}`, `player.rideH = 1.8` (глаза над горбами), `player.speedBonus = P.RIDE_BONUS`.
+  `updateCaravan` по-прежнему ставит всех верблюдов по следу, а `updateRide` следом переставляет ушедших: своего — под
+  `player.pos` лицом по `forward`, чужих — под `r.pos`/`r.fwd` тех remote, у кого в последнем `pos` есть `c`.
+  Ноги анимируются по фактической скорости. Место в цепочке пустует (остальные не сдвигаются).
+- **E — слезть.** `st.away = 'back'`, `st.dir` = точка спуска; верблюд идёт по дуге большого круга к `camelSlotDir(i)`
+  (место, где он должен быть *сейчас*) со скоростью `SPEED + 4` м/с; дойдя — `away = null`, и его снова ведёт `updateCaravan`.
+- **В дом верхом нельзя.** `house.onSpace` при `ride.camel >= 0` возвращает `false` (обычный прыжок), подсказка
+  «слезьте (E)».
+- **Сеть.** `camel {i, s:'ride', by}` и `camel {i, s:'back', d}` при посадке/спуске; `c` (номер верблюда) в каждом `pos`;
+  `camel` в `hello` — опоздавший сразу видит, кто на ком. Конфликт (двое сели одновременно на одного): при `claimed`
+  своим верблюдом уступает тот, у кого id больше (`dismount(false)`). Седок, от которого 6 с нет `pos` (вышел),
+  считается пропавшим — верблюд сам бежит назад.
+- **Детерминизм.** Караван по-прежнему симулируется по мировому времени; состояние седла — только сетевое, `rand()`
+  не тратится. Верблюдов в караване 5–7 (комната — до 5 игроков, каждому хватит).
+
 ## Сеть: шина в `net.js`
 
 `net.js` знает только про слоты, соединения, `hello`-базу (id, имя, цвет) и `pos`. Остальное — подписки:
 
-| Модуль | Добавляет в `hello` | Обрабатывает |
-|---|---|---|
-| `messages` | `plaques` (весь G-Set) | `hello` (слияние табличек), `ball`, `plaque` |
-| `caravan` | `t0` | `hello` (переход на более ранний `worldT0`) |
-| `roomsync` | `room` (LWW-регистр) | `hello` (`room`), `params` |
-| `ui` | — | `onNetChange` → перерисовать блок сети |
+| Модуль | Добавляет в `hello` | Добавляет в `pos` | Обрабатывает |
+|---|---|---|---|
+| `messages` | `plaques` (весь G-Set) | — | `hello` (слияние табличек), `ball`, `plaque` |
+| `caravan` | `t0` | — | `hello` (переход на более ранний `worldT0`) |
+| `ride` | `camel` | `c` | `hello` (`camel`), `camel` |
+| `roomsync` | `room` (LWW-регистр) | — | `hello` (`room`), `params` |
+| `ui` | — | — | `onNetChange` → перерисовать блок сети |
 
 Порядок обработки входящего `hello`: сначала `net` создаёт/обновляет аватар (`upsertRemote`), затем подписчики,
 затем `netStatus('')` → перерисовка UI.

@@ -10,7 +10,8 @@ import { trees } from './forest.js';
 import { setPitch, keys } from './player.js';
 import { house, debugEnter, debugExit } from './house.js';
 import { audio, initAudio } from './audio.js';
-import { caravan, worldT0 } from './caravan.js';
+import { caravan, worldT0, camelSlotDir } from './caravan.js';
+import { ride } from './ride.js';
 import { net } from './net.js';
 import { isOwner } from './roomsync.js';
 import { setParam } from './ui.js';
@@ -21,7 +22,7 @@ export function installDebug() {
   window.dbg = {
     P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
     biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED, roomState, isOwner, setParam,
-    player, houses, townPlatforms, house, keys, debugEnter, debugExit,
+    player, houses, townPlatforms, house, keys, debugEnter, debugExit, ride,
     get worldT0() { return worldT0; },
     get audio() { return audio; },
     get playerBiome() { return player.biome; },
@@ -63,6 +64,16 @@ export function installDebug() {
       const back = caravan.trail[0].dir;
       pos.copy(back).multiplyScalar(P.R - P.EYE);
       forward.copy(caravan.dir).sub(back);
+    },
+    // встать в 1.5 м сбоку от верблюда i (в его текущем слоте), лицом к нему
+    goToCamel(i = 0) {
+      const d = camelSlotDir(i, new THREE.Vector3());
+      const c = caravan.camels[i].group;
+      const right = new THREE.Vector3().setFromMatrixColumn(c.matrixWorld, 0).normalize();
+      const p = d.clone().addScaledVector(right, 1.5 / P.R).normalize();
+      pos.copy(p).multiplyScalar(P.R - P.EYE);
+      forward.copy(d).sub(p);
+      player.jumpH = 0; player.jumpV = 0;
     },
   };
 }

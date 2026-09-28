@@ -19,6 +19,7 @@ import { loadPlaques, updateMessages } from './messages.js';
 import { buildCaravan, updateCaravan } from './caravan.js';
 import { updateAmbience } from './ambience.js';
 import { netStart, updateNet } from './net.js';
+import { updateRide } from './ride.js';
 import './roomsync.js';
 import { updateHud } from './ui.js';
 import { installDebug } from './debug.js';
@@ -44,6 +45,7 @@ function tick() {
   updateCaravan();        // догнать мировое время, расставить верблюдов/погонщиков, анимация, звук
   updateAmbience();       // лес/город: громкость шин, планирование птиц, музыки, кухни
   updateNet(dt);          // своя позиция ~12 Гц, интерполяция чужих аватаров
+  updateRide(dt);         // приручение, свой верблюд под ногами, чужие седоки, возвращение отпущенных (после каравана и сети)
   updateSky();            // радиус и облачность неба
   const fowOn = updateFow(clock.elapsedTime);   // дымка, униформы тумана войны, карта разведки
   updateHud(fowOn);

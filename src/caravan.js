@@ -115,7 +115,7 @@ export function buildCaravan() {
   const tan = randomDir();
   tan.addScaledVector(dir, -tan.dot(dir)).normalize();   // случайная касательная: проекция на касательную плоскость
 
-  const count = 4 + Math.floor(rand() * 4);   // 4..7
+  const count = 5 + Math.floor(rand() * 3);   // 5..7 — не меньше, чем игроков в комнате: каждому по верблюду (ride.js)
   const camels = [];
   for (let i = 0; i < count; i++) {
     const c = makeCamel(
@@ -198,6 +198,8 @@ function trailDir(s, out) {
   }
   return out.copy(t[t.length - 1].dir);
 }
+// направление на место i-го верблюда в цепочке (для возвращения отпущенного верблюда — ride.js)
+export function camelSlotDir(i, out) { return trailDir(caravan.s - i * CAMEL_SPACING / P.R, out); }
 // базис в точке следа s: _cd — направление на точку, _cu — "верх" (к центру), _cf — вперёд по следу, _cr — вправо
 const _cd = new THREE.Vector3(), _cf = new THREE.Vector3(), _cu = new THREE.Vector3(), _cr = new THREE.Vector3(), _hd = new THREE.Vector3(), _m = new THREE.Matrix4();
 function trailFrame(s) {

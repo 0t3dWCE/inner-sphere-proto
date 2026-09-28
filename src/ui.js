@@ -12,6 +12,7 @@ import { initAudio } from './audio.js';
 import { net, onNetChange, sendHello } from './net.js';
 import { isOwner, ownerName, publishRoomParams, onRoomChange } from './roomsync.js';
 import { house } from './house.js';
+import { ride } from './ride.js';
 
 // ---------- панель параметров ----------
 const form = document.getElementById('params');
@@ -125,9 +126,11 @@ document.addEventListener('pointerlockchange', () => {
 
 // ---------- HUD ----------
 const hud = document.getElementById('hud');
+const tame = document.getElementById('tame'), tameText = document.getElementById('tameText'), tameFill = document.getElementById('tameFill');
 export function updateHud(fowOn) {
   const { pos, jumpH, groundH, biome } = player;
   if (player.inside) {
+    tame.style.display = 'none';
     const a = house.active;
     hud.textContent =
       `дом №${player.inside.house + 1}  ·  этаж ${player.inside.floor + 1} из ${a ? a.it.floors : '?'}` +
@@ -136,7 +139,15 @@ export function updateHud(fowOn) {
       (house.hint ? `  |  ${house.hint}` : '');
     return;
   }
+  // полоска приручения — пока идём рядом с верблюдом
+  const taming = ride.camel < 0 && ride.target >= 0 && ride.progress > 0;
+  tame.style.display = taming ? '' : 'none';
+  if (taming) {
+    tameText.textContent = `Верблюд №${ride.target + 1} привыкает к вам — ${Math.floor(100 * ride.progress / P.TAME_T)}%`;
+    tameFill.style.width = `${Math.min(100, 100 * ride.progress / P.TAME_T)}%`;
+  }
   hud.textContent =
+    (ride.hint ? `${ride.hint}  |  ` : '') +
     (house.hint ? `${house.hint}  |  ` : '') +
     `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
     `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}` +

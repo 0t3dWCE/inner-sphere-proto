@@ -61,6 +61,12 @@
     }
     #net .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
     #net .status { opacity: .75; font-size: 12px; }
+    #tame {
+      position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); z-index: 3; width: min(360px, 70vw);
+      color: #fff; font-size: 13px; text-align: center; text-shadow: 0 1px 2px #000; pointer-events: none; display: none;
+    }
+    #tame .bar { height: 10px; margin-top: 6px; border-radius: 5px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.35); overflow: hidden; }
+    #tame .fill { height: 100%; width: 0; background: linear-gradient(90deg, #d9a441, #f2c968); transition: width .1s linear; }
   </style>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script type="importmap">
@@ -80,13 +86,14 @@
     <div class="hint">Esc — отпустить мышь, чтобы редактировать. Значения сохраняются в браузере.</div>
   </div>
   <div id="crosshair"></div>
+  <div id="tame"><span id="tameText"></span><div class="bar"><div class="fill" id="tameFill"></div></div></div>
   <form id="chat" autocomplete="off">
     <input id="msg" maxlength="140" placeholder="Enter — написать сообщение" />
     <div class="hint" id="chatHint">Enter — «слепить» шар из сообщения · клик — бросить туда, куда смотришь</div>
   </form>
   <div id="overlay">
     Клик, чтобы начать
-    <small>WASD — ходьба · мышь — обзор · Space — прыжок · Enter — сообщение · Esc — выйти из захвата мыши</small>
+    <small>WASD — ходьба · мышь — обзор · Space — прыжок / войти в дом · E — слезть с верблюда · Enter — сообщение · Esc — выйти из захвата мыши</small>
   </div>
 
   <script type="module" src="./src/main.js"></script>
