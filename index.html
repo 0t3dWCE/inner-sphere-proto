@@ -46,13 +46,29 @@
     #msg:focus { border-color: #63b3ed; background: rgba(0,0,0,.75); }
     #msg::placeholder { color: rgba(255,255,255,.55); }
     #chat .hint { text-align: center; color: #fff; font-size: 12px; opacity: .75; margin-top: 6px; text-shadow: 0 1px 2px #000; }
+    #net {
+      position: fixed; left: 12px; top: 58px; z-index: 2; color: #fff; font-size: 13px; line-height: 1.6;
+      background: rgba(0,0,0,.45); padding: 6px 12px; border-radius: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    }
+    #net button {
+      background: #2b6cb0; color: #fff; border: 0; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px;
+    }
+    #net button:hover { background: #3182ce; }
+    #net input {
+      width: 110px; background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.25);
+      border-radius: 4px; padding: 2px 6px; font-size: 13px;
+    }
+    #net .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+    #net .status { opacity: .75; font-size: 12px; }
   </style>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script type="importmap">
     { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
   </script>
 </head>
 <body>
   <div id="hud"></div>
+  <div id="net"></div>
   <div id="settings">
     <div class="title">
       <span>Параметры</span>
@@ -113,6 +129,40 @@
       } catch { return { ...DEFAULTS }; }
     }
     const P = loadParams();   // живые параметры; читаются каждый кадр
+
+    // ---------- комната, личность, seed ----------
+    // Комната — в хеше URL (#room=abc123). Весь мир генерируется из seed'а комнаты (город, пропсы, лес, караван),
+    // поэтому у всех участников он одинаковый без передачи по сети; вне комнаты seed случайный.
+    const ROOM = (location.hash.match(/room=([A-Za-z0-9_-]{1,32})/) || [])[1] || null;
+    function hash32(str) {
+      let h = 2166136261;
+      for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+      return h >>> 0;
+    }
+    function mulberry32(a) {
+      return () => {
+        a = a + 0x6D2B79F5 | 0;
+        let t = Math.imul(a ^ a >>> 15, 1 | a);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+    const WORLD_SEED = ROOM ? hash32('inner-sphere:' + ROOM) : (Math.random() * 4294967296) >>> 0;
+    const rand = mulberry32(WORLD_SEED);                        // генерация мира
+    const randCaravan = mulberry32(WORLD_SEED ^ 0x9e3779b9);    // повороты каравана (детерминированная симуляция)
+    const NET_LOCKED = new Set(['R', 'CAMEL_SPEED']);           // в комнате мир общий — эти параметры фиксированы
+    if (ROOM) for (const k of NET_LOCKED) P[k] = DEFAULTS[k];
+    const ME = (() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem('inner-sphere-me') || 'null');
+        if (saved && saved.id && saved.name) return saved;
+      } catch { /* новый игрок */ }
+      const id = Array.from(crypto.getRandomValues(new Uint8Array(4)), b => b.toString(16).padStart(2, '0')).join('');
+      const me = { id, name: 'Игрок-' + id.slice(0, 4) };
+      localStorage.setItem('inner-sphere-me', JSON.stringify(me));
+      return me;
+    })();
+    const colorOf = id => new THREE.Color().setHSL((hash32('c:' + id) % 360) / 360, 0.72, 0.55);
 
     // ---------- сцена ----------
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -386,7 +436,7 @@
       scene.add(mesh);
     }
     function randomDir() {
-      const v = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1);
+      const v = new THREE.Vector3(rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1);
       return v.lengthSq() < 1e-4 ? randomDir() : v.normalize();
     }
 
@@ -400,7 +450,7 @@
     const TOWN_WALL_H = 2.2;
     const TOWN_AVOID = TOWN_H * 1.42 + 4;   // радиус (м), внутрь которого караван не заходит — отскакивает
     const townDir = (() => {
-      const az = Math.random() * Math.PI * 2;
+      const az = rand() * Math.PI * 2;
       const t = new THREE.Vector3(0, Math.cos(az), Math.sin(az));     // касательная в START_DIR
       return START_DIR.clone().multiplyScalar(Math.cos(0.6)).addScaledVector(t, Math.sin(0.6)).normalize();
     })();
@@ -588,8 +638,8 @@
     for (let tries = 0; trees.length < TREE_N && tries < 40000; tries++) {
       const d = randomDir();
       if (biomeAt(d) !== BIOME.FOREST) continue;
-      const u = Math.random();
-      trees.push({ dir: d, h: 4 + u * u * 8, yaw: Math.random() * Math.PI * 2 });
+      const u = rand();
+      trees.push({ dir: d, h: 4 + u * u * 8, yaw: rand() * Math.PI * 2 });
     }
     const trunkGeo = new THREE.CylinderGeometry(0.16, 0.26, 1, 6).translate(0, 0.5, 0);   // основание в y=0, высота 1
     const tierGeo = new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0);
@@ -603,7 +653,7 @@
     {
       const c = new THREE.Color();
       trees.forEach((t, i) => {
-        c.setHSL(0.33 + (Math.random() - 0.5) * 0.06, 0.45 + Math.random() * 0.2, 0.22 + Math.random() * 0.12);
+        c.setHSL(0.33 + (rand() - 0.5) * 0.06, 0.45 + rand() * 0.2, 0.22 + rand() * 0.12);
         for (let k = 0; k < 3; k++) tierIM.setColorAt(i * 3 + k, c);
       });
       tierIM.instanceColor.needsUpdate = true;
@@ -628,10 +678,10 @@
 
     // цветные пропсы — только на траве и песке (в лесу ёлки, в воде — нечего)
     for (let i = 0; i < 90; i++) {
-      const h = 2 + Math.random() * 6;
-      const w = 1 + Math.random() * 3;
+      const h = 2 + rand() * 6;
+      const w = 1 + rand() * 3;
       const mesh = new THREE.Mesh(
-        Math.random() < 0.5 ? new THREE.BoxGeometry(w, h, w) : new THREE.CylinderGeometry(w / 2, w / 2, h, 12),
+        rand() < 0.5 ? new THREE.BoxGeometry(w, h, w) : new THREE.CylinderGeometry(w / 2, w / 2, h, 12),
         fogify(new THREE.MeshStandardMaterial({ color: palette[i % palette.length], roughness: .8 }))
       );
       let n, b;
@@ -693,9 +743,9 @@
       body.position.y = H / 2;
       g.add(body);
       // крыша: четырёхскатная или плоская с парапетом
-      if (Math.random() < 0.65) {
+      if (rand() < 0.65) {
         // пирамида: конус с 4 гранями, повёрнутый на 45° (углы на ±0.707) и растянутый под прямоугольник со свесом
-        const rh = 1.6 + Math.random();
+        const rh = 1.6 + rand();
         const cone = new THREE.Mesh(new THREE.ConeGeometry(1, rh, 4), roof);
         cone.rotation.y = Math.PI / 4;
         cone.scale.set((w / 2 + 0.35) / Math.SQRT1_2, 1, (d / 2 + 0.35) / Math.SQRT1_2);
@@ -711,7 +761,7 @@
       }
       // дверь и окна на фасаде
       const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2, 0.12), townDarkMat);
-      door.position.set((Math.random() - 0.5) * (w - 2), 1, d / 2 + 0.05);
+      door.position.set((rand() - 0.5) * (w - 2), 1, d / 2 + 0.05);
       g.add(door);
       const winGeo = new THREE.BoxGeometry(0.7, 0.9, 0.12);
       for (let f = 0; f < floors; f++) {
@@ -723,8 +773,8 @@
       }
       // балконы на верхних этажах
       for (let f = 1; f < floors; f++) {
-        if (Math.random() < 0.3) continue;
-        const bx = (Math.random() < 0.5 ? -1 : 1) * w / 4;
+        if (rand() < 0.3) continue;
+        const bx = (rand() < 0.5 ? -1 : 1) * w / 4;
         const slab = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.14, 1.0), wall);
         slab.position.set(bx, f * 3 + 0.07, d / 2 + 0.5);
         const railF = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 0.06), townRailMat);
@@ -741,11 +791,11 @@
       // дома: в каждом квартале 2×2 участка, фасадом к ближайшей улице
       const slots = [TOWN_STREET / 2 + 4.2, TOWN_STREET / 2 + 11.5];
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const cx of slots) for (const cz of slots) {
-        const w = 4 + Math.random() * 2.2, d = 4 + Math.random() * 2.2;
-        const floors = 1 + Math.floor(Math.random() * 3);
+        const w = 4 + rand() * 2.2, d = 4 + rand() * 2.2;
+        const floors = 1 + Math.floor(rand() * 3);
         const house = makeHouse(w, d, floors,
-          WALL_COLORS[Math.floor(Math.random() * WALL_COLORS.length)],
-          palette[Math.floor(Math.random() * palette.length)]);
+          WALL_COLORS[Math.floor(rand() * WALL_COLORS.length)],
+          palette[Math.floor(rand() * palette.length)]);
         const x = sx * cx, z = sz * cz;
         // фасад — к ближайшей улице: yaw поворачивает +Z в направлении v
         const v = cx < cz ? [-sx, 0] : [0, -sz];
@@ -869,18 +919,26 @@
     // ---------- сообщения-шарики ----------
     // Enter -> печатаем -> Enter: текст превращается в шар "в руке" (справа внизу, ~15% экрана).
     // Клик: шар летит туда, куда смотрит камера, притягивается к стенке и, коснувшись её, становится табличкой.
-    const PLAYER_COLOR = new THREE.Color(palette[Math.floor(Math.random() * palette.length)]);
+    const PLAYER_COLOR = colorOf(ME.id);   // цвет игрока — из его id, одинаков у всех участников
     const BALL_R = 0.35;
     const PLAQUE_W = 4, PLAQUE_H = 2;
     const msgInput = document.getElementById('msg');
     const chatHint = document.getElementById('chatHint');
     let heldText = null;
-    const balls = [];    // { mesh, vel, text }
+    const balls = [];    // { mesh, vel, text, remote }
     const plaques = [];  // { mesh, n } — поворачиваем к игроку каждый кадр
+    const plaqueIds = new Set();   // реестр табличек по id — множество только растёт, слияние с сетью без конфликтов
 
-    const ballMaterial = fogify(new THREE.MeshStandardMaterial({
-      color: PLAYER_COLOR, emissive: PLAYER_COLOR, emissiveIntensity: .2, roughness: .45,
-    }));
+    const ballMats = new Map();    // цвет -> материал (свои и чужие шары)
+    function ballMaterialFor(color) {
+      const key = color.getHex();
+      if (!ballMats.has(key)) ballMats.set(key, fogify(new THREE.MeshStandardMaterial({
+        color, emissive: color, emissiveIntensity: .2, roughness: .45,
+      })));
+      return ballMats.get(key);
+    }
+    const ballMaterial = ballMaterialFor(PLAYER_COLOR);
+    const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('');
     // шар "в руке" — ребёнок камеры; при FOV 75 и дистанции 2 радиус 0.23 даёт ~15% высоты экрана
     const heldBall = new THREE.Mesh(new THREE.SphereGeometry(0.23, 32, 16), ballMaterial);
     heldBall.position.set(1.05, -0.5, -2);
@@ -900,13 +958,18 @@
       msgInput.blur();
     });
 
+    function spawnBall(position, vel, text, color, remote) {
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 12), ballMaterialFor(color));
+      mesh.position.copy(position);
+      scene.add(mesh);
+      balls.push({ mesh, vel: vel.clone(), text, remote });
+    }
     function throwBall() {
       if (!heldText) return;
-      const mesh = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 12), ballMaterial);
-      heldBall.getWorldPosition(mesh.position);
+      const p = heldBall.getWorldPosition(new THREE.Vector3());
       const vel = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(P.THROW_SPEED);
-      scene.add(mesh);
-      balls.push({ mesh, vel, text: heldText });
+      spawnBall(p, vel, heldText, PLAYER_COLOR, false);
+      netBroadcast({ t: 'ball', text: heldText, color: PLAYER_COLOR.getHex(), p: p.toArray(), v: vel.toArray() });
       heldText = null;
       heldBall.visible = false;
       chatHint.textContent = 'Enter — «слепить» шар из сообщения · клик — бросить туда, куда смотришь';
@@ -928,11 +991,11 @@
       return lines;
     }
 
-    function makePlaque(text) {
+    function makePlaque(text, color = PLAYER_COLOR) {
       const c = document.createElement('canvas');
       c.width = 512; c.height = 256;
       const g = c.getContext('2d');
-      const frame = '#' + PLAYER_COLOR.getHexString();
+      const frame = '#' + color.getHexString();
       g.fillStyle = 'rgba(20,20,28,.88)';
       g.fillRect(0, 0, c.width, c.height);
       g.lineWidth = 14;
@@ -959,13 +1022,28 @@
       );
     }
 
-    function landBall(b) {
-      const n = b.mesh.position.clone().normalize();   // точка касания стенки
-      const plaque = makePlaque(b.text);
+    // табличка из записи { id, text, color, n:[x,y,z], author, ts }; повторы по id игнорируются
+    function addPlaque(rec) {
+      if (plaqueIds.has(rec.id)) return false;
+      plaqueIds.add(rec.id);
+      const n = new THREE.Vector3().fromArray(rec.n).normalize();
+      const plaque = makePlaque(rec.text, new THREE.Color(rec.color));
       addProp(plaque, n, PLAQUE_H);                    // стоит на стенке, переезжает при смене радиуса
-      plaques.push({ mesh: plaque, n });
+      plaques.push({ mesh: plaque, n, rec });
+      return true;
+    }
+    const plaqueList = () => plaques.map(p => p.rec);
+    function landBall(b) {
       scene.remove(b.mesh);
       b.mesh.geometry.dispose();
+      if (b.remote) return;   // чужой шар: табличку пришлёт автор — точка приземления его, чтобы не разъехалось
+      const rec = {
+        id: newId(), text: b.text, color: PLAYER_COLOR.getHex(),
+        n: b.mesh.position.clone().normalize().toArray(), author: ME.name, ts: Date.now(),
+      };
+      addPlaque(rec);
+      savePlaques();
+      netBroadcast({ t: 'plaque', rec });
     }
 
     const _g = new THREE.Vector3(), _pu = new THREE.Vector3(), _pz = new THREE.Vector3(), _px = new THREE.Vector3();
@@ -1053,21 +1131,21 @@
       const tan = randomDir();
       tan.addScaledVector(dir, -tan.dot(dir)).normalize();   // случайная касательная: проекция на касательную плоскость
 
-      const count = 4 + Math.floor(Math.random() * 4);   // 4..7
+      const count = 4 + Math.floor(rand() * 4);   // 4..7
       const camels = [];
       for (let i = 0; i < count; i++) {
         const c = makeCamel(
-          CAMEL_COLORS[Math.floor(Math.random() * CAMEL_COLORS.length)],
-          Math.random() < 0.6 ? palette[Math.floor(Math.random() * palette.length)] : null
+          CAMEL_COLORS[Math.floor(rand() * CAMEL_COLORS.length)],
+          rand() < 0.6 ? palette[Math.floor(rand() * palette.length)] : null
         );
-        c.phase = Math.random() * Math.PI * 2;
+        c.phase = rand() * Math.PI * 2;
         // фазы ног: примерно диагональная походка, но с разбросом — идут не в такт
-        c.legPhase = [0, Math.PI, Math.PI * 0.55, Math.PI * 1.55].map(p => p + (Math.random() - 0.5) * 0.7);
-        c.gait = 0.85 + Math.random() * 0.3;              // индивидуальный темп
-        c.bellFreq = [1760, 1980, 2350, 2640, 2960][i % 5] * (0.97 + Math.random() * 0.06);  // свой колокольчик
+        c.legPhase = [0, Math.PI, Math.PI * 0.55, Math.PI * 1.55].map(p => p + (rand() - 0.5) * 0.7);
+        c.gait = 0.85 + rand() * 0.3;              // индивидуальный темп
+        c.bellFreq = [1760, 1980, 2350, 2640, 2960][i % 5] * (0.97 + rand() * 0.06);  // свой колокольчик
         c.lastCycle = -1;
         c.lastStep = [-1, -1, -1, -1];
-        c.group.scale.setScalar(0.9 + Math.random() * 0.25);
+        c.group.scale.setScalar(0.9 + rand() * 0.25);
         scene.add(c.group);
         camels.push(c);
       }
@@ -1118,21 +1196,21 @@
     }
 
     caravan.herders = (() => {
-      const n = 3 + Math.floor(Math.random() * 2);      // 3..4
+      const n = 3 + Math.floor(rand() * 2);      // 3..4
       const camelLen = (caravan.camels.length - 1) * CAMEL_SPACING;   // длина цепочки, м
       const list = [];
       for (let i = 0; i < n; i++) {
         const h = makeHerder(
-          HERDER_ROBES[Math.floor(Math.random() * HERDER_ROBES.length)],
-          HERDER_TURBANS[Math.floor(Math.random() * HERDER_TURBANS.length)]
+          HERDER_ROBES[Math.floor(rand() * HERDER_ROBES.length)],
+          HERDER_TURBANS[Math.floor(rand() * HERDER_TURBANS.length)]
         );
         h.side = i % 2 === 0 ? 1 : -1;                    // чередуем стороны
-        h.lateral = 2.2 + Math.random() * 0.8;            // метров от оси каравана
-        h.phase = Math.random() * Math.PI * 2;
+        h.lateral = 2.2 + rand() * 0.8;            // метров от оси каравана
+        h.phase = rand() * Math.PI * 2;
         h.wanderAmp = Math.max(1.5, camelLen / 2 + 1.5);  // размах прогулки вдоль каравана, м
-        h.wanderW = (1.6 / h.wanderAmp) * (0.8 + Math.random() * 0.4);   // ~пик 1.6 м/с относительно каравана
-        h.gaitPhase = Math.random() * Math.PI * 2;
-        h.group.scale.setScalar(0.95 + Math.random() * 0.12);
+        h.wanderW = (1.6 / h.wanderAmp) * (0.8 + rand() * 0.4);   // ~пик 1.6 м/с относительно каравана
+        h.gaitPhase = rand() * Math.PI * 2;
+        h.group.scale.setScalar(0.95 + rand() * 0.12);
         scene.add(h.group);
         list.push(h);
       }
@@ -1451,6 +1529,231 @@
       o.start(t); lfo.start(t); o.stop(t + 0.9); lfo.stop(t + 0.9);
     }
 
+    // ---------- сеть: PeerJS ----------
+    // Комнат у PeerJS нет — id пиров детерминированные: inner-sphere-<room>-<slot>, slot 0..4. При входе занимаем
+    // первый свободный слот (ошибка unavailable-id -> следующий) и соединяемся со всеми занятыми: полный mesh.
+    // Инициирует соединение тот, у кого слот больше (иначе оба откроют по каналу); раз в 4 с добираем недостающих.
+    // Публичный сигналинг 0.peerjs.com, в нём же STUN/TURN. Один надёжный JSON-канал на пару:
+    //   hello  — имя, цвет, worldT0, все таблички (G-Set: слияние по id, конфликтов нет)
+    //   pos    — позиция/взгляд/прыжок, ~12 Гц
+    //   ball   — брошенный шар (у всех летит визуально; табличку ставит только автор)
+    //   plaque — приземлившаяся табличка
+    // Таблички комнаты и worldT0 лежат в localStorage: после F5 мир на месте ещё до соединения.
+    const NET_MAX = 5, POS_HZ = 12;
+    const net = { peer: null, slot: -1, conns: new Map(), remotes: new Map(), pending: new Map(), status: '' };
+    const netEl = document.getElementById('net');
+    const slotId = s => `inner-sphere-${ROOM}-${s}`;
+    const slotOf = peerId => parseInt(peerId.split('-').pop(), 10);
+    const PLAQUES_KEY = 'inner-sphere-plaques-' + ROOM;
+
+    function savePlaques() {
+      if (!ROOM) return;
+      try { localStorage.setItem(PLAQUES_KEY, JSON.stringify(plaqueList().slice(-300))); } catch { /* переполнено — не страшно */ }
+    }
+    if (ROOM) {
+      try { for (const rec of JSON.parse(localStorage.getItem(PLAQUES_KEY) || '[]')) addPlaque(rec); } catch { /* битый кэш */ }
+    }
+
+    function netBroadcast(msg) {
+      for (const c of net.conns.values()) if (c.open) c.send(msg);
+    }
+    function netStatus(s) {
+      if (s !== undefined) net.status = s;
+      renderNetPanel();
+    }
+    function renderNetPanel() {
+      netEl.replaceChildren();
+      const add = (tag, props = {}, text) => { const el = Object.assign(document.createElement(tag), props); if (text != null) el.textContent = text; netEl.appendChild(el); return el; };
+      if (!ROOM) {
+        add('span', {}, 'Одиночный режим');
+        add('button', { type: 'button', onclick: () => { location.hash = 'room=' + newId().slice(0, 6); location.reload(); } }, 'Создать комнату');
+        return;
+      }
+      const me = add('span');
+      me.append(Object.assign(document.createElement('span'), { className: 'dot', style: `background:#${PLAYER_COLOR.getHexString()}` }));
+      const nameIn = Object.assign(document.createElement('input'), { value: ME.name, maxLength: 20, title: 'Ваше имя' });
+      nameIn.addEventListener('change', () => {
+        ME.name = nameIn.value.trim() || ME.name; nameIn.value = ME.name;
+        localStorage.setItem('inner-sphere-me', JSON.stringify(ME));
+        netBroadcast(helloMsg());
+      });
+      me.append(nameIn);
+      add('span', {}, `комната ${ROOM} · игроков: ${1 + net.remotes.size}`);
+      for (const r of net.remotes.values()) {
+        const s = add('span');
+        s.append(Object.assign(document.createElement('span'), { className: 'dot', style: `background:#${r.color.getHexString()}` }), r.name);
+      }
+      add('button', {
+        type: 'button', onclick: e => { navigator.clipboard?.writeText(location.href); e.target.textContent = 'Скопировано'; setTimeout(() => e.target.textContent = 'Ссылка', 1500); },
+      }, 'Ссылка');
+      if (net.status) add('span', { className: 'status' }, net.status);
+    }
+
+    const helloMsg = () => ({ t: 'hello', id: ME.id, name: ME.name, color: PLAYER_COLOR.getHex(), t0: worldT0, plaques: plaqueList() });
+
+    function netStart() {
+      if (!ROOM || typeof Peer === 'undefined') { renderNetPanel(); return; }
+      netStatus('подключение…');
+      claimSlot(0);
+    }
+    function claimSlot(s) {
+      if (s >= NET_MAX) { netStatus('комната полна (5 человек)'); return; }
+      const peer = new Peer(slotId(s), { debug: 1 });
+      peer.on('open', () => {
+        net.peer = peer; net.slot = s;
+        netStatus('');
+        dialOthers();
+        setInterval(dialOthers, 4000);
+      });
+      peer.on('connection', attachConn);
+      peer.on('disconnected', () => { netStatus('переподключение…'); setTimeout(() => { if (!peer.destroyed) peer.reconnect(); }, 1000); });
+      peer.on('error', e => {
+        if (e.type === 'unavailable-id') { peer.destroy(); claimSlot(s + 1); return; }
+        if (e.type === 'peer-unavailable') {                       // слот пуст — норма; снимаем «набираем»
+          const m = String(e.message).match(/-(\d+)$/); if (m) net.pending.delete(parseInt(m[1], 10));
+          return;
+        }
+        console.warn('peer error', e.type, e);
+        netStatus('сеть: ' + e.type);
+        if (!net.peer) setTimeout(() => claimSlot(0), 3000);        // не смогли даже занять слот — пробуем позже
+      });
+    }
+    function dialOthers() {
+      if (!net.peer || net.peer.disconnected) return;
+      const now = Date.now();
+      for (let s = 0; s < net.slot; s++) {                          // звоним только «вниз»
+        if (net.conns.has(s)) continue;
+        if (now - (net.pending.get(s) || 0) < 8000) continue;
+        net.pending.set(s, now);
+        attachConn(net.peer.connect(slotId(s), { reliable: true, serialization: 'json' }));
+      }
+    }
+    function attachConn(conn) {
+      const slot = slotOf(conn.peer);
+      conn.on('open', () => {
+        net.pending.delete(slot);
+        const old = net.conns.get(slot);
+        if (old && old !== conn) old.close();
+        net.conns.set(slot, conn);
+        conn.send(helloMsg());
+        netStatus('');
+      });
+      conn.on('data', m => onNetData(slot, m));
+      const gone = () => {
+        net.pending.delete(slot);
+        if (net.conns.get(slot) !== conn) return;
+        net.conns.delete(slot);
+        removeRemote(slot);
+        netStatus('');
+      };
+      conn.on('close', gone);
+      conn.on('error', gone);
+    }
+
+    // ---- удалённые игроки: цилиндр цвета игрока, голова с «носом» по взгляду, имя над головой ----
+    function makeAvatar(color, name) {
+      const g = new THREE.Group();
+      const mat = fogify(new THREE.MeshStandardMaterial({ color, roughness: .7 }));
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 1.35, 14), mat); body.position.y = 0.675;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 12), fogify(new THREE.MeshStandardMaterial({ color: 0xf1d3b3, roughness: .8 }))); head.position.y = 1.62;
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.2, 8), mat); nose.rotation.x = -Math.PI / 2; nose.position.set(0, 1.62, -0.3);
+      g.add(body, head, nose, makeNameSprite(name, color));
+      return g;
+    }
+    function makeNameSprite(name, color) {
+      const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+      const g = c.getContext('2d');
+      g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, 0, 256, 64);
+      g.fillStyle = '#' + color.getHexString(); g.fillRect(0, 0, 10, 64);
+      g.fillStyle = '#fff'; g.font = '600 30px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(name.slice(0, 16), 133, 34);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+      sp.scale.set(1.8, 0.45, 1); sp.position.y = 2.15;
+      sp.name = 'label';
+      return sp;
+    }
+    function upsertRemote(slot, msg) {
+      let r = net.remotes.get(slot);
+      const color = new THREE.Color(msg.color);
+      if (r && (r.name !== msg.name || r.color.getHex() !== color.getHex())) { scene.remove(r.group); r = null; }
+      if (!r) {
+        r = { id: msg.id, name: msg.name, color, group: makeAvatar(color, msg.name),
+              pos: null, target: new THREE.Vector3(), fwd: new THREE.Vector3(0, 0, -1), tfwd: new THREE.Vector3(0, 0, -1), jump: 0 };
+        r.group.visible = false;
+        scene.add(r.group);
+        net.remotes.set(slot, r);
+      }
+      r.id = msg.id;
+      return r;
+    }
+    function removeRemote(slot) {
+      const r = net.remotes.get(slot);
+      if (!r) return;
+      scene.remove(r.group);
+      net.remotes.delete(slot);
+    }
+    function onNetData(slot, m) {
+      if (!m || typeof m !== 'object') return;
+      switch (m.t) {
+        case 'hello': {
+          upsertRemote(slot, m);
+          if (Number.isFinite(m.t0) && m.t0 < worldT0) {          // чужой мир старше — переходим на его часы (караван догонит)
+            worldT0 = m.t0;
+            localStorage.setItem('inner-sphere-t0-' + ROOM, String(worldT0));
+          }
+          let added = 0;
+          for (const rec of m.plaques || []) if (rec && rec.id && addPlaque(rec)) added++;
+          if (added) savePlaques();
+          netStatus('');
+          break;
+        }
+        case 'pos': {
+          const r = net.remotes.get(slot);
+          if (!r) return;
+          r.target.fromArray(m.p);
+          r.tfwd.fromArray(m.f);
+          r.jump = m.j || 0;
+          if (!r.pos) { r.pos = r.target.clone(); r.fwd.copy(r.tfwd); r.group.visible = true; }
+          break;
+        }
+        case 'ball': {
+          const r = net.remotes.get(slot);
+          spawnBall(new THREE.Vector3().fromArray(m.p), new THREE.Vector3().fromArray(m.v), m.text,
+                    new THREE.Color(m.color ?? (r ? r.color.getHex() : 0xffffff)), true);
+          break;
+        }
+        case 'plaque':
+          if (m.rec && m.rec.id && addPlaque(m.rec)) savePlaques();
+          break;
+      }
+    }
+
+    // каждый кадр: своя позиция ~12 Гц, чужие — интерполяция к последней известной
+    let netAcc = 0;
+    const _ru = new THREE.Vector3(), _rr = new THREE.Vector3(), _rm = new THREE.Matrix4();
+    function updateNet(dt) {
+      if (!ROOM) return;
+      netAcc += dt;
+      if (netAcc >= 1 / POS_HZ && net.conns.size) {
+        netAcc = 0;
+        netBroadcast({ t: 'pos', p: pos.toArray(), f: forward.toArray(), j: jumpH });
+      }
+      const k = 1 - Math.exp(-dt * 12);
+      for (const r of net.remotes.values()) {
+        if (!r.pos) continue;
+        r.pos.lerp(r.target, k);
+        r.fwd.lerp(r.tfwd, k);
+        _ru.copy(r.pos).normalize();                                  // направление на игрока
+        r.fwd.addScaledVector(_ru, -r.fwd.dot(_ru)).normalize();      // взгляд — в касательной плоскости
+        _rr.crossVectors(r.fwd, _ru.clone().negate()).normalize();    // right = forward × up
+        r.group.position.copy(_ru).multiplyScalar(surfaceR(_ru) - r.jump);   // ноги на земле
+        _rm.makeBasis(_rr, _ru.clone().negate(), r.fwd.clone().negate());
+        r.group.quaternion.setFromRotationMatrix(_rm);
+      }
+    }
+    addEventListener('pagehide', () => { if (net.peer) net.peer.destroy(); });   // освобождаем слот сразу
+    netStart();
+
     // положение на следе по накопленному углу s (slerp между соседними отметками)
     function trailDir(s, out) {
       const t = caravan.trail;
@@ -1477,7 +1780,19 @@
       _cr.crossVectors(_cu, _cf);
     }
 
-    function updateCaravan(dt) {
+    // Симуляция вожака идёт фиксированным шагом по «мировому времени» (Date.now() - worldT0) и берёт случайности
+    // из randCaravan — поэтому у всех участников комнаты с одним seed и одним worldT0 караван в одном месте,
+    // без передачи его состояния по сети. worldT0 — момент рождения мира; в комнате все сходятся к самому раннему.
+    const CARAVAN_DT = 0.05;
+    let worldT0 = Date.now();
+    if (ROOM) {
+      const saved = parseInt(localStorage.getItem('inner-sphere-t0-' + ROOM) || '', 10);
+      if (Number.isFinite(saved) && saved < worldT0) worldT0 = saved;
+      localStorage.setItem('inner-sphere-t0-' + ROOM, String(worldT0));
+    }
+    const worldTime = () => (Date.now() - worldT0) / 1000;
+    caravan.simT = 0;
+    function stepCaravan(dt) {
       const cv = caravan, R = P.R;
       // вожак: шаг по большому кругу в плоскости (dir, tan)
       const ang = P.CAMEL_SPEED * dt / R;
@@ -1493,7 +1808,7 @@
           const toward = cv.tan.dot(_hd);
           if (toward > 0) {
             cv.tan.addScaledVector(_hd, -2 * toward);
-            cv.tan.applyAxisAngle(cv.dir, (Math.random() - 0.5) * 0.4).normalize();  // чуть сбить угол, чтобы не зациклиться
+            cv.tan.applyAxisAngle(cv.dir, (randCaravan() - 0.5) * 0.4).normalize();  // чуть сбить угол, чтобы не зациклиться
           }
         };
         bounce(townDir, TOWN_AVOID);
@@ -1505,13 +1820,20 @@
         // пол-сферы пройдено — поворачиваем кольцо на случайный угол 35..110° в любую сторону
         if (cv.travelled >= Math.PI) {
           cv.travelled = 0;
-          const turn = (Math.random() < 0.5 ? -1 : 1) * THREE.MathUtils.degToRad(35 + Math.random() * 75);
+          const turn = (randCaravan() < 0.5 ? -1 : 1) * THREE.MathUtils.degToRad(35 + randCaravan() * 75);
           cv.tan.applyAxisAngle(cv.dir, turn).normalize();
         }
         // подрезаем хвост следа
         const minS = cv.s - (cv.camels.length + 1) * CAMEL_SPACING / R - 0.05;
         while (cv.trail.length > 2 && cv.trail[1].s < minS) cv.trail.shift();
       }
+    }
+
+    function updateCaravan() {
+      const cv = caravan, R = P.R;
+      // догоняем мировое время фиксированными шагами (после долгого отсутствия — порциями, чтобы не подвесить кадр)
+      const target = worldTime();
+      for (let n = 0; cv.simT + CARAVAN_DT <= target && n < 60000; n++) { stepCaravan(CARAVAN_DT); cv.simT += CARAVAN_DT; }
 
       const t = clock.elapsedTime;
       const spacing = CAMEL_SPACING / R;
@@ -1595,6 +1917,7 @@
       span.textContent = label;
       const input = document.createElement('input');
       Object.assign(input, { type: 'number', name: key, min, max, step, value: P[key] });
+      if (ROOM && NET_LOCKED.has(key)) { input.disabled = true; input.title = 'В комнате мир общий — параметр фиксирован'; }
       input.addEventListener('input', () => {
         const v = parseFloat(input.value);
         if (!Number.isFinite(v)) return;
@@ -1607,6 +1930,7 @@
     form.addEventListener('submit', e => e.preventDefault());
 
     function setParam(key, value) {
+      if (ROOM && NET_LOCKED.has(key)) return;
       if (key === 'EYE') value = Math.min(value, P.R / 2);   // глаза не выше центра сферы
       P[key] = value;
       if (key === 'R') { P.EYE = Math.min(P.EYE, P.R / 2); inputs.EYE.value = P.EYE; applyRadius(); }
@@ -1651,7 +1975,8 @@
     if (location.search.includes('debug')) {
       window.dbg = {
         P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
-        biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR,
+        biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED,
+        get worldT0() { return worldT0; },
         get audio() { return audio; },
         get playerBiome() { return playerBiome; },
         setPitch: v => { pitch = v; },
@@ -1724,8 +2049,9 @@
       camera.rotateX(pitch);
 
       updateMessages(dt);
-      updateCaravan(dt);
+      updateCaravan();
       updateAmbience();
+      updateNet(dt);
 
       // небо: радиус R - SKY_H (но не ближе 3 м к глазам), облачность и дрейф
       const skyR = P.R - Math.min(P.SKY_H, P.R - P.EYE - 3);
