@@ -141,7 +141,7 @@ export function updateHud(fowOn) {
   }
   // полоска приручения — пока идём рядом с верблюдом
   const taming = ride.camel < 0 && ride.target >= 0 && ride.progress > 0;
-  tame.style.display = taming ? '' : 'none';
+  tame.style.display = taming ? 'block' : 'none';   // в CSS у #tame display:none — '' вернул бы его
   if (taming) {
     tameText.textContent = `Верблюд №${ride.target + 1} привыкает к вам — ${Math.floor(100 * ride.progress / P.TAME_T)}%`;
     tameFill.style.width = `${Math.min(100, 100 * ride.progress / P.TAME_T)}%`;

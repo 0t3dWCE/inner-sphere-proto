@@ -107,10 +107,14 @@ export function updateRide(dt) {
 
   // приручение: ближайший свободный верблюд цепочки в радиусе NEAR
   if (ride.camel < 0 && !player.inside) {
+    const distTo = c => _slot.copy(c.group.position).normalize().angleTo(_d) * P.R;
     let best = -1, bestD = NEAR;
-    camels.forEach((c, i) => {
+    // уже приручаемый верблюд держится, пока он в радиусе — иначе в плотной цепочке цель прыгала бы к соседу
+    const cur = ride.target >= 0 ? camels[ride.target] : null;
+    if (cur && !stateOf(cur).away && distTo(cur) < NEAR) best = ride.target;
+    else camels.forEach((c, i) => {
       if (stateOf(c).away) return;
-      const dist = _slot.copy(c.group.position).normalize().angleTo(_d) * P.R;
+      const dist = distTo(c);
       if (dist < bestD) { bestD = dist; best = i; }
     });
     if (best >= 0) {
