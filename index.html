@@ -287,6 +287,42 @@
     }
 
     const palette = [0xe4572e, 0x17bebb, 0xffc914, 0x2e282a, 0x76b041, 0x9b5de5, 0xf15bb5];
+
+    // ---------- городок: где стоит ----------
+    // Старт игрока — на "экваторе" в START_DIR; город ставим в ~0.6 рад от него (≈48 м при R=80) со случайным азимутом.
+    const START_DIR = new THREE.Vector3(1, 0, 0);
+    const TOWN_H = 20;                      // полуразмер: стена на ±TOWN_H (м)
+    const TOWN_STREET = 5;                  // ширина улиц (м)
+    const TOWN_WALL_H = 2.2;
+    const TOWN_AVOID = TOWN_H * 1.42 + 4;   // радиус (м), внутрь которого караван не заходит — отскакивает
+    const townDir = (() => {
+      const az = Math.random() * Math.PI * 2;
+      const t = new THREE.Vector3(0, Math.cos(az), Math.sin(az));     // касательная в START_DIR
+      return START_DIR.clone().multiplyScalar(Math.cos(0.6)).addScaledVector(t, Math.sin(0.6)).normalize();
+    })();
+    // локальные оси города в касательной плоскости; "верх" объектов — к центру (-townDir)
+    const townEx = new THREE.Vector3(), townEz = new THREE.Vector3();
+    {
+      const ref = Math.abs(townDir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      townEx.crossVectors(ref, townDir).normalize();
+      townEz.crossVectors(townDir, townEx).normalize();
+    }
+    // локальные координаты города (x, z в метрах по поверхности) <-> направление на сфере (экспоненциальное отображение)
+    const _tt = new THREE.Vector3(), _tt2 = new THREE.Vector3();
+    function townToDir(x, z, out) {     // out не должен совпадать с _tt2
+      const r = Math.hypot(x, z);
+      if (r < 1e-6) return out.copy(townDir);
+      const a = r / P.R;
+      _tt2.copy(townEx).multiplyScalar(x / r).addScaledVector(townEz, z / r);
+      return out.copy(townDir).multiplyScalar(Math.cos(a)).addScaledVector(_tt2, Math.sin(a)).normalize();
+    }
+    function dirToTown(dir, out) {
+      const a = dir.angleTo(townDir);
+      if (a < 1e-6) return out.set(0, 0);
+      _tt2.copy(dir).addScaledVector(townDir, -Math.cos(a)).divideScalar(Math.sin(a));
+      return out.set(a * P.R * _tt2.dot(townEx), a * P.R * _tt2.dot(townEz));
+    }
+
     for (let i = 0; i < 90; i++) {
       const h = 2 + Math.random() * 6;
       const w = 1 + Math.random() * 3;
@@ -294,7 +330,9 @@
         Math.random() < 0.5 ? new THREE.BoxGeometry(w, h, w) : new THREE.CylinderGeometry(w / 2, w / 2, h, 12),
         fogify(new THREE.MeshStandardMaterial({ color: palette[i % palette.length], roughness: .8 }))
       );
-      addProp(mesh, randomDir(), h);
+      let n;
+      do n = randomDir(); while (n.angleTo(townDir) * P.R < TOWN_H * 1.7);   // не внутри города и не у стен
+      addProp(mesh, n, h);
     }
     // несколько высоких "маяков" — ориентиры, хорошо видны на уходящем вверх горизонте
     for (let i = 0; i < 6; i++) {
@@ -304,6 +342,144 @@
       );
       addProp(pole, randomDir(), 18);
     }
+
+    // ---------- городок: постройки ----------
+    // Две улицы крест-накрест, по 4 дома в каждом квартале (1–3 этажа, балконы, цветные крыши),
+    // невысокая стена с воротами на концах улиц и башенками по углам. Каждый объект ставится на сферу
+    // отдельно (со своей нормалью), иначе на краях города они бы висели в воздухе из-за кривизны.
+    const townObjects = [];     // { group, x, z, yaw } — чтобы переставлять при смене радиуса
+    const townObstacles = [];   // AABB в локальных координатах города: { x0, z0, x1, z1 }
+    const WALL_COLORS = [0xf1e3c8, 0xe9d5b3, 0xf6efe0, 0xd9c2a0, 0xf3d9c5, 0xe0e8f0];
+    const townWallMat = fogify(new THREE.MeshStandardMaterial({ color: 0xb9a98c, roughness: 1, flatShading: true }));
+    const townDarkMat = fogify(new THREE.MeshStandardMaterial({ color: 0x3a2f2a, roughness: .9 }));
+    const townRailMat = fogify(new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: .7 }));
+
+    const _tu = new THREE.Vector3(), _tf = new THREE.Vector3(), _tr = new THREE.Vector3(), _m0 = new THREE.Matrix4();
+    function placeTownObject(o) {
+      const { group, x, z, yaw } = o;
+      townToDir(x, z, _tt);
+      group.position.copy(_tt).multiplyScalar(P.R - 0.02);
+      _tu.copy(_tt).negate();
+      _tf.copy(townEz).addScaledVector(_tu, -townEz.dot(_tu)).normalize();   // "север" города в этой точке
+      _tr.crossVectors(_tu, _tf);
+      group.quaternion.setFromRotationMatrix(_m0.makeBasis(_tr, _tu, _tf));
+      group.rotateY(yaw);
+    }
+    function addTownObject(group, x, z, yaw = 0) {
+      const o = { group, x, z, yaw };
+      townObjects.push(o);
+      placeTownObject(o);
+      scene.add(group);
+      return o;
+    }
+    function addObstacle(cx, cz, w, d) {
+      townObstacles.push({ x0: cx - w / 2, z0: cz - d / 2, x1: cx + w / 2, z1: cz + d / 2 });
+    }
+
+    // дом: начало координат — на земле по центру, фасад смотрит в +Z
+    function makeHouse(w, d, floors, wallColor, roofColor) {
+      const g = new THREE.Group();
+      const H = floors * 3;
+      const wall = fogify(new THREE.MeshStandardMaterial({ color: wallColor, roughness: .95 }));
+      const roof = fogify(new THREE.MeshStandardMaterial({ color: roofColor, roughness: .8, flatShading: true }));
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, H, d), wall);
+      body.position.y = H / 2;
+      g.add(body);
+      // крыша: четырёхскатная или плоская с парапетом
+      if (Math.random() < 0.65) {
+        // пирамида: конус с 4 гранями, повёрнутый на 45° (углы на ±0.707) и растянутый под прямоугольник со свесом
+        const rh = 1.6 + Math.random();
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(1, rh, 4), roof);
+        cone.rotation.y = Math.PI / 4;
+        cone.scale.set((w / 2 + 0.35) / Math.SQRT1_2, 1, (d / 2 + 0.35) / Math.SQRT1_2);
+        cone.position.y = H + rh / 2;
+        g.add(cone);
+      } else {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.3, d + 0.4), roof);
+        slab.position.y = H + 0.15;
+        g.add(slab);
+        const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.5, 0.2), roof);
+        parapet.position.set(0, H + 0.55, d / 2 + 0.1);
+        g.add(parapet);
+      }
+      // дверь и окна на фасаде
+      const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2, 0.12), townDarkMat);
+      door.position.set((Math.random() - 0.5) * (w - 2), 1, d / 2 + 0.05);
+      g.add(door);
+      const winGeo = new THREE.BoxGeometry(0.7, 0.9, 0.12);
+      for (let f = 0; f < floors; f++) {
+        for (const sx of [-1, 1]) {
+          const win = new THREE.Mesh(winGeo, townDarkMat);
+          win.position.set(sx * w / 4, f * 3 + 1.8, d / 2 + 0.05);
+          g.add(win);
+        }
+      }
+      // балконы на верхних этажах
+      for (let f = 1; f < floors; f++) {
+        if (Math.random() < 0.3) continue;
+        const bx = (Math.random() < 0.5 ? -1 : 1) * w / 4;
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.14, 1.0), wall);
+        slab.position.set(bx, f * 3 + 0.07, d / 2 + 0.5);
+        const railF = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 0.06), townRailMat);
+        railF.position.set(bx, f * 3 + 0.5, d / 2 + 0.97);
+        const railGeo = new THREE.BoxGeometry(0.06, 0.7, 1.0);
+        const railL = new THREE.Mesh(railGeo, townRailMat); railL.position.set(bx - 0.87, f * 3 + 0.5, d / 2 + 0.5);
+        const railR = new THREE.Mesh(railGeo, townRailMat); railR.position.set(bx + 0.87, f * 3 + 0.5, d / 2 + 0.5);
+        g.add(slab, railF, railL, railR);
+      }
+      return g;
+    }
+
+    (function buildTown() {
+      // дома: в каждом квартале 2×2 участка, фасадом к ближайшей улице
+      const slots = [TOWN_STREET / 2 + 4.2, TOWN_STREET / 2 + 11.5];
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const cx of slots) for (const cz of slots) {
+        const w = 4 + Math.random() * 2.2, d = 4 + Math.random() * 2.2;
+        const floors = 1 + Math.floor(Math.random() * 3);
+        const house = makeHouse(w, d, floors,
+          WALL_COLORS[Math.floor(Math.random() * WALL_COLORS.length)],
+          palette[Math.floor(Math.random() * palette.length)]);
+        const x = sx * cx, z = sz * cz;
+        // фасад — к ближайшей улице: yaw поворачивает +Z в направлении v
+        const v = cx < cz ? [-sx, 0] : [0, -sz];
+        addTownObject(house, x, z, Math.atan2(v[0], v[1]));
+        // AABB: дом повёрнут на кратное 90°, поэтому при повороте на ±90° w и d меняются местами
+        const swap = Math.abs(v[0]) > 0;
+        addObstacle(x, z, swap ? d : w, swap ? w : d);
+      }
+      // стена: сегменты по 4 м, ворота шириной 7 м на концах улиц
+      const seg = 4, half = TOWN_H, gate = 3.5;
+      for (let c = -half + seg / 2; c < half; c += seg) {
+        if (Math.abs(c) < gate) continue;
+        for (const s of [-1, 1]) {
+          const wz = new THREE.Mesh(new THREE.BoxGeometry(seg + 0.15, TOWN_WALL_H, 0.8), townWallMat);
+          wz.position.y = TOWN_WALL_H / 2;
+          addTownObject(new THREE.Group().add(wz), c, s * half, 0);
+          addObstacle(c, s * half, seg + 0.15, 0.8);
+          const wx = new THREE.Mesh(new THREE.BoxGeometry(0.8, TOWN_WALL_H, seg + 0.15), townWallMat);
+          wx.position.y = TOWN_WALL_H / 2;
+          addTownObject(new THREE.Group().add(wx), s * half, c, 0);
+          addObstacle(s * half, c, 0.8, seg + 0.15);
+        }
+      }
+      // угловые башенки и столбы ворот
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const t = new THREE.Mesh(new THREE.BoxGeometry(2, 3.4, 2), townWallMat);
+        t.position.y = 1.7;
+        const cap = new THREE.Mesh(new THREE.ConeGeometry(1.6, 1.2, 4), fogify(new THREE.MeshStandardMaterial({ color: 0x8c3b2e, flatShading: true })));
+        cap.position.y = 4.0; cap.rotation.y = Math.PI / 4;
+        addTownObject(new THREE.Group().add(t, cap), sx * half, sz * half, 0);
+        addObstacle(sx * half, sz * half, 2, 2);
+      }
+      for (const s of [-1, 1]) for (const g of [-gate, gate]) {
+        const p1 = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 1), townWallMat); p1.position.y = 1.5;
+        addTownObject(new THREE.Group().add(p1), g, s * half, 0);
+        addObstacle(g, s * half, 1, 1);
+        const p2 = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 1), townWallMat); p2.position.y = 1.5;
+        addTownObject(new THREE.Group().add(p2), s * half, g, 0);
+        addObstacle(s * half, g, 1, 1);
+      }
+    })();
 
     // всё, что зависит от радиуса: геометрия сферы, туман, свет, дальность камеры, позиции объектов
     function applyRadius() {
@@ -316,15 +492,44 @@
       camera.updateProjectionMatrix();
       sun.intensity = 3 * R * R;
       for (const p of props) placeOnWall(p.mesh, p.n, p.h);
+      for (const o of townObjects) placeTownObject(o);
     }
     applyRadius();
 
     // ---------- игрок ----------
     // pos — позиция глаз. Гравитация направлена от центра к стенке, поэтому "верх" = -normalize(pos)
-    const pos = new THREE.Vector3(P.R - P.EYE, 0, 0);    // стартуем на "экваторе" (вдали от полюсов UV-сетки)
+    const pos = START_DIR.clone().multiplyScalar(P.R - P.EYE);   // стартуем на "экваторе" (вдали от полюсов UV-сетки)
     const forward = new THREE.Vector3(0, 0, -1);         // касательное направление взгляда
     let pitch = 0;                                       // наклон камеры вверх/вниз
     let jumpH = 0, jumpV = 0;                            // высота над стенкой (прыжок) и скорость
+
+    // коллизии игрока с домами и стеной: круг радиуса PLAYER_RAD против AABB в локальных координатах города
+    const PLAYER_RAD = 0.45;
+    const _pl = new THREE.Vector2(), _pd = new THREE.Vector3();
+    function collideWithTown() {
+      _pd.copy(pos).normalize();
+      if (_pd.angleTo(townDir) * P.R > TOWN_H * 1.6) return;
+      dirToTown(_pd, _pl);
+      let moved = false;
+      for (const o of townObstacles) {
+        const cx = THREE.MathUtils.clamp(_pl.x, o.x0, o.x1), cz = THREE.MathUtils.clamp(_pl.y, o.z0, o.z1);
+        const dx = _pl.x - cx, dz = _pl.y - cz, d2 = dx * dx + dz * dz;
+        if (d2 >= PLAYER_RAD * PLAYER_RAD) continue;
+        if (d2 < 1e-9) {
+          // оказались внутри — выталкиваем через ближайшую грань
+          const pen = [_pl.x - o.x0, o.x1 - _pl.x, _pl.y - o.z0, o.z1 - _pl.y];
+          const k = pen.indexOf(Math.min(...pen));
+          if (k === 0) _pl.x = o.x0 - PLAYER_RAD; else if (k === 1) _pl.x = o.x1 + PLAYER_RAD;
+          else if (k === 2) _pl.y = o.z0 - PLAYER_RAD; else _pl.y = o.z1 + PLAYER_RAD;
+        } else {
+          const d = Math.sqrt(d2);
+          _pl.x = cx + dx / d * PLAYER_RAD;
+          _pl.y = cz + dz / d * PLAYER_RAD;
+        }
+        moved = true;
+      }
+      if (moved) { townToDir(_pl.x, _pl.y, _pd); pos.copy(_pd).multiplyScalar(pos.length()); }
+    }
 
     const isTyping = e => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
     const keys = new Set();
@@ -718,6 +923,15 @@
         cv.dir.multiplyScalar(Math.cos(ang)).addScaledVector(cv.tan, Math.sin(ang)).normalize();
         cv.tan.multiplyScalar(Math.cos(ang)).addScaledVector(_cd, -Math.sin(ang));
         cv.tan.addScaledVector(cv.dir, -cv.tan.dot(cv.dir)).normalize();
+        // город — запретная зона: у границы TOWN_AVOID отражаем направление движения (отскок от стены)
+        if (cv.dir.angleTo(townDir) * R < TOWN_AVOID) {
+          _hd.copy(townDir).addScaledVector(cv.dir, -cv.dir.dot(townDir)).normalize();   // к городу, в касательной плоскости
+          const toward = cv.tan.dot(_hd);
+          if (toward > 0) {
+            cv.tan.addScaledVector(_hd, -2 * toward);
+            cv.tan.applyAxisAngle(cv.dir, (Math.random() - 0.5) * 0.4).normalize();  // чуть сбить угол, чтобы не зациклиться
+          }
+        }
         cv.s += ang;
         cv.travelled += ang;
         const last = cv.trail[cv.trail.length - 1];
@@ -869,9 +1083,15 @@
     // отладка: ?debug в URL открывает состояние в консоли (window.dbg), напр. dbg.goToCaravan()
     if (location.search.includes('debug')) {
       window.dbg = {
-        P, pos, forward, caravan, camera, initAudio,
+        P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
         get audio() { return audio; },
         setPitch: v => { pitch = v; },
+        // встать у южных ворот города лицом к нему
+        goToTown(dist = TOWN_H + 8) {
+          const d = townToDir(0, -dist, new THREE.Vector3());
+          pos.copy(d).multiplyScalar(P.R - P.EYE);
+          forward.copy(townDir).sub(d);
+        },
         // встать в 12 м позади каравана лицом к нему
         goToCaravan() {
           const back = caravan.trail[0].dir;
@@ -896,6 +1116,7 @@
       if (keys.has('KeyD') || keys.has('ArrowRight')) _move.add(_right);
       if (keys.has('KeyA') || keys.has('ArrowLeft')) _move.sub(_right);
       if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), P.SPEED * dt);
+      collideWithTown();
 
       // прыжок: "притяжение" тянет обратно к стенке
       if (jumpH > 0 || jumpV > 0) {
@@ -936,7 +1157,8 @@
         `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
         `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}` +
         (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '') +
-        `  |  караван: ${(caravan.dir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м`;
+        `  |  караван: ${(caravan.dir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
+        `  |  город: ${(townDir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м`;
 
       renderer.render(scene, camera);
       requestAnimationFrame(tick);
