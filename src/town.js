@@ -35,9 +35,12 @@ export function houseDoorNear(tx, tz) {
   return null;
 }
 // площадка под точкой (x, z) города или null
-export function townPlatformAt(tx, tz) {
-  for (const p of townPlatforms) if (tx >= p.x0 && tx <= p.x1 && tz >= p.z0 && tz <= p.z1) return p;
-  return null;
+// самая высокая площадка под точкой, не выше h + 0.05 (балконы разных этажей стоят друг над другом)
+export function townPlatformAt(tx, tz, h = Infinity) {
+  let best = null;
+  for (const p of townPlatforms)
+    if (tx >= p.x0 && tx <= p.x1 && tz >= p.z0 && tz <= p.z1 && p.h <= h + 0.05 && (!best || p.h > best.h)) best = p;
+  return best;
 }
 const WALL_COLORS = [0xf1e3c8, 0xe9d5b3, 0xf6efe0, 0xd9c2a0, 0xf3d9c5, 0xe0e8f0];
 const townWallMat = fogify(new THREE.MeshStandardMaterial({ color: 0xb9a98c, roughness: 1, flatShading: true }));

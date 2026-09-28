@@ -1,7 +1,7 @@
 // Интерьеры домов.
 // Пробел у входной двери (или стоя на балконе) — игрок оказывается внутри: это отдельная сцена houseScene с плоским
 // полом и обычной гравитацией вниз. «Внутри» дом больше, чем снаружи (ширина/глубина × 1.7–2.6, у каждого свой
-// коэффициент), этажей столько же, между ними лестница вдоль левой стены. Комнаты разделены перегородками
+// коэффициент), этажей столько же, между ними лестницы вдоль боковых стен (чередуются: левая, правая). Комнаты разделены перегородками
 // с проёмами, мебель расставлена случайно, обои свои на каждом этаже, у каждого дома — своя «особенность».
 // Всё генерируется из seed'а мира и номера дома (rand() мира не трогаем), поэтому у всех в комнате одинаково.
 // Выход — через входную дверь (появляемся перед ней) или через балконную дверь (появляемся на балконе снаружи).
@@ -100,10 +100,16 @@ function buildInterior(h) {
   const glassMat = new THREE.MeshStandardMaterial({ color: 0xdfeefb, emissive: 0xcfe3f5, emissiveIntensity: 1.1, roughness: .3 });
   const doorMat = std(0x4a2f1e);
 
-  // лестница: вдоль левой (−X) стены, снизу (−Z) вверх (+Z)
+  // лестницы: снизу (−Z) вверх (+Z) вдоль боковой стены; этажи чередуют стену (1→2 у левой, 2→3 у правой),
+  // иначе вторая лестница встала бы ровно над проёмом первой и упёрлась в его ограждение
   const SW = 1.3;   // ширина лестницы
   // первая ступень в 1.6 м от задней стены — свободная площадка, чтобы зайти на лестницу лицом к ней
-  const sx0 = -W / 2 + 0.2, sx1 = sx0 + SW, sz0 = -D / 2 + 1.6, L = Math.min(4.8, D - 4.2), sz1 = sz0 + L;
+  const sz0 = -D / 2 + 1.6, L = Math.min(4.8, D - 4.2), sz1 = sz0 + L;
+  const stairGeo = f => {                       // геометрия лестницы, ведущей с этажа f на f+1
+    const side = f % 2 === 0 ? -1 : 1;
+    const x0 = side < 0 ? -W / 2 + 0.2 : W / 2 - 0.2 - SW, x1 = x0 + SW;
+    return { f, side, x0, x1, z0: sz0, z1: sz1, ix: side < 0 ? x1 : x0 };   // ix — внутренний (открытый) край
+  };
 
   // «особенность» дома — что-то одно, заметное, на первом этаже у задней стены (до мебели: она её обойдёт)
   addSpecial(h, rng, { W, D, box, block, g, lights });
@@ -111,10 +117,16 @@ function buildInterior(h) {
   for (let f = 0; f < floors; f++) {
     const y0 = f * FH;
     const paper = makeWallpaper(rng);
+    const up = f < floors - 1 ? stairGeo(f) : null;      // лестница с этого этажа наверх
+    const hole = f > 0 ? stairGeo(f - 1) : null;          // проём в полу над лестницей снизу
     // пол: сплошной на 1 этаже, выше — с проёмом над лестницей
     const floorMat = texMat(planks, W / 2, D / 2);
-    const slabs = f === 0 || floors === 1 ? [[-W / 2, -D / 2, W / 2, D / 2]]
-      : [[sx1, -D / 2, W / 2, D / 2], [sx0 - 0.2, -D / 2, sx1, sz0], [sx0 - 0.2, sz1, sx1, D / 2]];
+    let slabs;
+    if (!hole) slabs = [[-W / 2, -D / 2, W / 2, D / 2]];
+    else {
+      const hx0 = hole.side < 0 ? -W / 2 : hole.x0, hx1 = hole.side < 0 ? hole.x1 : W / 2;
+      slabs = [[-W / 2, -D / 2, W / 2, hole.z0], [-W / 2, hole.z1, W / 2, D / 2], [-W / 2, hole.z0, hx0, hole.z1], [hx1, hole.z0, W / 2, hole.z1]];
+    }
     for (const [x0, z0, x1, z1] of slabs) {
       if (x1 - x0 < 0.05 || z1 - z0 < 0.05) continue;
       box(x1 - x0, 0.12, z1 - z0, floorMat, (x0 + x1) / 2, y0 - 0.06, (z0 + z1) / 2);
@@ -135,12 +147,13 @@ function buildInterior(h) {
     const bxIn = balc ? balc.bx * kx : null;
     for (const wx of [-W / 4, W / 4]) {
       if (bxIn !== null && Math.abs(wx - bxIn) < 1.2) continue;
+      if (f === 0 && Math.abs(wx - h.doorX * kx) < 1.2) continue;   // не поверх входной двери
       box(1.1, 1.3, 0.06, glassMat, wx, y0 + 1.7, D / 2 - 0.22);
       box(1.3, 0.08, 0.16, trimMat, wx, y0 + 1.02, D / 2 - 0.24);   // подоконник
     }
     box(1.1, 1.3, 0.06, glassMat, -W / 4, y0 + 1.7, -D / 2 + 0.22);
-    box(0.06, 1.3, 1.1, glassMat, W / 2 - 0.22, y0 + 1.7, D / 4);
-    box(0.06, 1.3, 1.1, glassMat, -W / 2 + 0.22, y0 + 1.7, D / 2 - 1.3);   // левая стена: подальше от лестницы
+    box(0.06, 1.3, 1.1, glassMat, W / 2 - 0.22, y0 + 1.7, D / 2 - 1.3);    // боковые: у фасада, подальше от лестниц
+    box(0.06, 1.3, 1.1, glassMat, -W / 2 + 0.22, y0 + 1.7, D / 2 - 1.3);
     // входная дверь (1 этаж) и балконные двери
     if (f === 0) {
       const dx = h.doorX * kx;
@@ -163,38 +176,46 @@ function buildInterior(h) {
     box(0.5, 0.12, 0.5, std(0xfff7e0, { emissive: 0xfff1c0, emissiveIntensity: .9 }), 0, y0 + FH - 0.1, 0);
 
     // лестница наверх
-    if (f < floors - 1) {
+    if (up) {
+      const { x0: sx0, x1: sx1, ix, side } = up;
       const N = 14, stepD = L / N, stepH = FH / N;
       const stepMat = texMat(planks, 1, 0.3);
       for (let i = 0; i < N; i++)
         box(SW, stepH, stepD, stepMat, (sx0 + sx1) / 2, y0 + stepH * (i + 0.5), sz0 + stepD * (i + 0.5));
       // перила с внутренней стороны (наклонный брус) и стойки
-      const rail = box(0.06, 0.08, Math.hypot(L, FH), trimMat, sx1 + 0.02, y0 + FH / 2 + 0.95, (sz0 + sz1) / 2);
+      const rx = ix - side * 0.02;
+      const rail = box(0.06, 0.08, Math.hypot(L, FH), trimMat, rx, y0 + FH / 2 + 0.95, (sz0 + sz1) / 2);
       rail.rotation.x = -Math.atan2(FH, L);
-      for (let i = 0; i <= 4; i++) box(0.05, 0.95, 0.05, trimMat, sx1 + 0.02, y0 + FH * i / 4 + 0.47, sz0 + L * i / 4);
-      block(sx1 - 0.05, sz0 + 0.3, sx1 + 0.08, sz1, y0, y0 + FH - 0.3);            // не сойти вбок с лестницы
+      for (let i = 0; i <= 4; i++) box(0.05, 0.95, 0.05, trimMat, rx, y0 + FH * i / 4 + 0.47, sz0 + L * i / 4);
+      block(Math.min(ix - side * 0.05, ix + side * 0.08), sz0 + 0.3, Math.max(ix - side * 0.05, ix + side * 0.08), sz1, y0, y0 + FH - 0.3);   // не сойти вбок
       // чулан под лестницей — чтобы не заходить под ступени с верхнего конца (блок только для стоящих на полу)
-      box(SW, 1.9, 1.0, trimMat, (sx0 + sx1) / 2, y0 + 0.95, sz1 - 0.5);
-      block(sx0, sz1 - 1.0, sx1, sz1, y0, y0 + 1.9);
-      stairs.push({ f, x0: sx0, x1: sx1, z0: sz0, z1: sz1 });
+      box(SW, 1.8, 1.0, trimMat, (sx0 + sx1) / 2, y0 + 0.9, sz1 - 0.5);
+      block(sx0, sz1 - 1.0, sx1, sz1, y0, y0 + 1.8);
+      stairs.push({ f, x0: sx0, x1: sx1, z0: sz0, z1: sz1, side });
     }
-    // ограждение проёма на этаже выше лестницы
-    if (f > 0) {
-      box(0.06, 0.9, L, trimMat, sx1 + 0.02, y0 + 0.45, (sz0 + sz1) / 2);
-      box(SW, 0.9, 0.06, trimMat, (sx0 + sx1) / 2, y0 + 0.45, sz0 - 0.03);
-      block(sx1 - 0.05, sz0 - 0.1, sx1 + 0.08, sz1, y0, y0 + 1.0);
-      block(sx0 - 0.2, sz0 - 0.1, sx1, sz0, y0, y0 + 1.0);
+    // ограждение проёма над лестницей снизу: вдоль открытого края и поперёк у нижнего конца
+    if (hole) {
+      const { x0: hx0, x1: hx1, ix, side } = hole;
+      const rx = ix - side * 0.02;
+      box(0.06, 0.9, L, trimMat, rx, y0 + 0.45, (sz0 + sz1) / 2);
+      box(SW, 0.9, 0.06, trimMat, (hx0 + hx1) / 2, y0 + 0.45, sz0 - 0.03);
+      block(Math.min(ix - side * 0.05, ix + side * 0.08), sz0 - 0.1, Math.max(ix - side * 0.05, ix + side * 0.08), sz1, y0, y0 + 1.0);
+      block(side < 0 ? -W / 2 : hx0, sz0 - 0.1, side < 0 ? hx1 : W / 2, sz0, y0, y0 + 1.0);
     }
 
+    // зона мебели по X: вдоль лестницы и вдоль проёма — свободный проход ≥ 1 м
+    const leftBusy = (up && up.side < 0) || (hole && hole.side < 0), rightBusy = (up && up.side > 0) || (hole && hole.side > 0);
+    const xMin = leftBusy ? -W / 2 + 0.2 + SW + 1.1 : -W / 2 + 0.3;
+    const xMax = rightBusy ? W / 2 - 0.2 - SW - 1.1 : W / 2 - 0.3;
     // перегородки: поперёк (вдоль X) с проёмом; в широких домах ещё одна вдоль Z
     const partMat = () => texMat(paper, 2, FH / 2.4);
     const roomZones = [];   // запретные зоны для мебели: дверные проёмы и перед выходами
-    const corridorX = floors > 1 ? sx1 + 1.1 : -W / 2 + 0.3;   // вдоль лестницы/перил — свободный проход ≥ 1 м
     let zp = null;
-    if (D >= 7) {
+    if (D >= 7 && xMax - xMin >= 3.2) {
       zp = -D / 2 + 2.8 + rng() * (D - 5.6);
-      const gapX = corridorX + 1.0 + rng() * (W / 2 - corridorX - 2.4);
-      const pieces = [[corridorX, gapX - 0.7], [gapX + 0.7, W / 2 - 0.2]];   // проём 1.4 м
+      const px0 = leftBusy ? xMin : -W / 2 + 0.2, px1 = rightBusy ? xMax : W / 2 - 0.2;   // от стены до стены, кроме проходов
+      const gapX = xMin + 1.0 + rng() * (xMax - xMin - 2.0);
+      const pieces = [[px0, gapX - 0.7], [gapX + 0.7, px1]];   // проём 1.4 м
       for (const [x0, x1] of pieces) {
         if (x1 - x0 < 0.1) continue;
         box(x1 - x0, FH, 0.15, partMat(), (x0 + x1) / 2, y0 + FH / 2, zp);
@@ -202,9 +223,9 @@ function buildInterior(h) {
       }
       box(1.5, 0.1, 0.2, trimMat, gapX, y0 + 2.15, zp);   // притолока
       roomZones.push({ x0: gapX - 1.3, z0: zp - 1.5, x1: gapX + 1.3, z1: zp + 1.5 });
-      if (W >= 11) {
+      if (xMax - xMin >= 7) {
         const side = rng() < 0.5 ? -1 : 1;                 // половина по Z, где будет вторая стена
-        const xp = corridorX + 2.5 + rng() * (W / 2 - corridorX - 4.5);
+        const xp = xMin + 2.5 + rng() * (xMax - xMin - 5.0);
         const z0 = side < 0 ? -D / 2 + 0.2 : zp + 0.08, z1 = side < 0 ? zp - 0.08 : D / 2 - 0.2;
         const gapZ = z0 + 1.0 + rng() * (z1 - z0 - 2.0);
         for (const [a, b] of [[z0, gapZ - 0.7], [gapZ + 0.7, z1]]) {
@@ -216,18 +237,18 @@ function buildInterior(h) {
       }
     }
     for (const e of exits) if (e.f === f) roomZones.push({ x0: e.x - 1.2, z0: e.z - 1.4, x1: e.x + 1.2, z1: D / 2 });
-    if (f < floors - 1) roomZones.push({ x0: sx0 - 0.3, z0: sz0 - 1.5, x1: sx1 + 0.8, z1: sz1 + 1.5 });   // подход к лестнице
-    if (f > 0) roomZones.push({ x0: sx0 - 0.3, z0: sz0 - 0.3, x1: sx1 + 0.8, z1: sz1 + 1.6 });          // выход с лестницы
+    if (up) roomZones.push({ x0: up.x0 - 0.8, z0: sz0 - 1.5, x1: up.x1 + 0.8, z1: sz1 + 1.5 });        // подход к лестнице
+    if (hole) roomZones.push({ x0: hole.x0 - 0.8, z0: sz0 - 0.3, x1: hole.x1 + 0.8, z1: sz1 + 1.6 });  // выход с лестницы
 
     // мебель
-    placeFurniture(f, y0, rng, { W, D, box, block, obstacles, roomZones, g, paper, planks, corridorX, lights });
+    placeFurniture(f, y0, rng, { W, D, box, block, obstacles, roomZones, g, xMin, xMax, leftWall: !leftBusy, rightWall: !rightBusy, lights });
   }
 
   return { h, group: g, W, D, floors, obstacles, stairs, exits, kx };
 }
 
 function placeFurniture(f, y0, rng, ctx) {
-  const { W, D, box, block, obstacles, roomZones, g, corridorX } = ctx;
+  const { W, D, box, block, obstacles, roomZones, g, xMin, xMax, leftWall, rightWall } = ctx;
   const woods = [0x8b5a2b, 0x6f4e37, 0xa47148, 0x4b3621];
   const cloths = [0x9b2226, 0x005f73, 0x6a994e, 0xbc6c25, 0x5e548e, 0xe07a5f];
   const wood = () => std(woods[Math.floor(rng() * woods.length)]);
@@ -282,25 +303,28 @@ function placeFurniture(f, y0, rng, ctx) {
   // либо прижат (щель < 0.3 — туда всё равно не пройти), либо стоит от неё на ≥ GAP. Игрок — круг диаметром 0.7.
   const GAP = 1.0;
   const wallOk = d => d < 0.3 || d >= GAP;
+  // xMin/xMax — зона мебели по X; если с той стороны стена (а не проход вдоль лестницы), к ней можно прижаться
   const fits = (x0, z0, x1, z1) => {
-    if (x0 < corridorX + 0.3 || x1 > W / 2 - 0.2 || z0 < -D / 2 + 0.2 || z1 > D / 2 - 0.2) return false;
-    if (!wallOk(W / 2 - 0.2 - x1) || !wallOk(z0 + D / 2 - 0.2) || !wallOk(D / 2 - 0.2 - z1)) return false;
-    if (corridorX <= -W / 2 + 0.5 && !wallOk(x0 + W / 2 - 0.2)) return false;   // без лестницы левая стена — обычная
+    if (x0 < xMin || x1 > xMax || z0 < -D / 2 + 0.2 || z1 > D / 2 - 0.2) return false;
+    if (!wallOk(z0 + D / 2 - 0.2) || !wallOk(D / 2 - 0.2 - z1)) return false;
+    if (leftWall && !wallOk(x0 + W / 2 - 0.2)) return false;
+    if (rightWall && !wallOk(W / 2 - 0.2 - x1)) return false;
     for (const o of obstacles) if (o.y0 < y0 + FH && o.y1 > y0 && x0 < o.x1 + GAP && x1 > o.x0 - GAP && z0 < o.z1 + GAP && z1 > o.z0 - GAP) return false;
     for (const r of roomZones) if (x0 < r.x1 && x1 > r.x0 && z0 < r.z1 && z1 > r.z0) return false;
     return true;
   };
-  const n = Math.round((W / 2 - corridorX) * D / 16) + 1;
+  const n = Math.round((xMax - xMin) * D / 16) + 1;
   for (let i = 0; i < n; i++) {
     const k = kinds[Math.floor(rng() * kinds.length)];
+    if (xMax - xMin < k.w + 0.2) continue;
     for (let t = 0; t < 40; t++) {
-      let x = corridorX + 0.3 + k.w / 2 + rng() * (W / 2 - corridorX - k.w - 0.5);
+      let x = xMin + k.w / 2 + rng() * (xMax - xMin - k.w);
       let z = -D / 2 + 0.2 + k.d / 2 + rng() * (D - k.d - 0.4);
       // прижать к стене, если оказались близко
       if (z - k.d / 2 < -D / 2 + 0.9) z = -D / 2 + 0.25 + k.d / 2;
       else if (z + k.d / 2 > D / 2 - 0.9) z = D / 2 - 0.25 - k.d / 2;
-      if (x + k.w / 2 > W / 2 - 0.9) x = W / 2 - 0.25 - k.w / 2;
-      else if (corridorX <= -W / 2 + 0.5 && x - k.w / 2 < -W / 2 + 0.9) x = -W / 2 + 0.25 + k.w / 2;
+      if (rightWall && x + k.w / 2 > W / 2 - 0.9) x = W / 2 - 0.25 - k.w / 2;
+      else if (leftWall && x - k.w / 2 < -W / 2 + 0.9) x = -W / 2 + 0.25 + k.w / 2;
       if (!fits(x - k.w / 2, z - k.d / 2, x + k.w / 2, z + k.d / 2)) continue;
       const bb = k.build(x, z, wood());
       if (bb && !k.noBlock) block(bb[0], bb[1], bb[2], bb[3], y0, y0 + 1.2);
@@ -311,7 +335,7 @@ function placeFurniture(f, y0, rng, ctx) {
   // картины на задней стене
   const pics = 1 + Math.floor(rng() * 2);
   for (let i = 0; i < pics; i++) {
-    const x = corridorX + 1 + rng() * (W / 2 - corridorX - 2), pw = 0.6 + rng() * 0.8, ph = 0.5 + rng() * 0.6;
+    const x = xMin + 1 + rng() * Math.max(0.5, xMax - xMin - 2), pw = 0.6 + rng() * 0.8, ph = 0.5 + rng() * 0.6;
     box(pw + 0.1, ph + 0.1, 0.05, std(0x3b2a1a), x, y0 + 1.7, -D / 2 + 0.23);
     box(pw, ph, 0.05, std(new THREE.Color().setHSL(rng(), 0.5, 0.5)), x, y0 + 1.7, -D / 2 + 0.25);
   }
@@ -419,11 +443,11 @@ function groundAt(it, x, z, y) {
   for (let f = 0; f < it.floors; f++) {
     const sy = f * FH;
     if (sy > y + 0.6) break;
-    const hole = f > 0 && it.stairs.find(s => s.f === f - 1 && x >= s.x0 - 0.2 && x <= s.x1 && z >= s.z0 && z <= s.z1);
+    const hole = f > 0 && it.stairs.find(s => s.f === f - 1 && x >= s.x0 - 0.2 && x <= s.x1 + 0.2 && z >= s.z0 && z <= s.z1);
     if (!hole) best = Math.max(best, sy);
   }
   for (const s of it.stairs) {
-    if (x < s.x0 - 0.2 || x > s.x1 || z < s.z0 || z > s.z1 + 1.0) continue;
+    if (x < s.x0 - 0.2 || x > s.x1 + 0.2 || z < s.z0 || z > s.z1 + 1.0) continue;
     const t = THREE.MathUtils.clamp((z - s.z0) / (s.z1 - s.z0), 0, 1);
     const ry = s.f * FH + t * FH;
     if (ry <= y + 0.6) best = Math.max(best, ry);
@@ -466,7 +490,7 @@ const controller = {
       if (p.y <= ground) { p.y = ground; a.vy = 0; a.grounded = true; } else a.grounded = false;
     }
     // потолок — кроме лестничного проёма, там над головой открыто до следующего этажа
-    const onStair = it.stairs.some(s => p.x >= s.x0 - 0.2 && p.x <= s.x1 && p.z >= s.z0 && p.z <= s.z1);
+    const onStair = it.stairs.some(s => p.x >= s.x0 - 0.2 && p.x <= s.x1 + 0.2 && p.z >= s.z0 && p.z <= s.z1);
     const ceil = onStair ? it.floors * FH : (Math.floor(p.y / FH + 0.01) + 1) * FH;
     if (p.y + EYE_IN + 0.2 > ceil) { p.y = ceil - EYE_IN - 0.2; a.vy = Math.min(a.vy, 0); }
     player.inside.floor = Math.round(p.y / FH);

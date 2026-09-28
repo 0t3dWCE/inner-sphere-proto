@@ -122,7 +122,7 @@ export function updatePlayer(dt) {
   // координаты в системе города и площадка под ногами (балкон)
   nearTown = _pd.angleTo(townDir) * P.R < TOWN_H * 1.6;
   if (nearTown) dirToTown(_pd, townXZ); else townXZ.set(1e9, 1e9);
-  const plat = nearTown ? townPlatformAt(townXZ.x, townXZ.y) : null;
+  const plat = nearTown ? townPlatformAt(townXZ.x, townXZ.y, player.jumpH) : null;   // не выше нас: балконы стоят друг над другом
 
   // прыжок: "притяжение" тянет обратно к стенке
   if (player.jumpH > 0 || player.jumpV > 0) {
