@@ -16,6 +16,8 @@ export const SCHEMA = [
   ['FOW_R',      'Радиус видимости (×R)', 0.1,    1.5,  0.05],
   ['FOW_MEMORY', 'Яркость разведанного',  0,      1,    0.05],
   ['CAMEL_SPEED', 'Скорость каравана',    0,      30,   0.5],
+  ['TAME_T',     'Приручение верблюда (с)', 1,    300,  1],
+  ['RIDE_BONUS', 'Верблюд: +скорость',    0,      100,  1],
   ['SOUND_R',    'Радиус звука каравана', 0,      200,  1],
   ['VOLUME',     'Громкость',             0,      1,    0.05],
   ['SKY_H',      'Высота неба (0 — нет)', 0,      200,  1],
@@ -26,7 +28,7 @@ export const SCHEMA = [
 ];
 export const DEFAULTS = {
   R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45,
-  FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35, CAMEL_SPEED: 2.5, SOUND_R: 25, VOLUME: 0.6,
+  FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35, CAMEL_SPEED: 2.5, TAME_T: 45, RIDE_BONUS: 10, SOUND_R: 25, VOLUME: 0.6,
   SKY_H: 30, SKY_CLOUDS: 0.5, HAZE: 110, AMBIENCE: 1, TERRAIN_H: 5,
 };
 export const STORAGE_KEY = 'inner-sphere-params';

@@ -13,6 +13,7 @@ import { camera } from './scene.js';
 import { townToDir } from './world.js';
 import { houses, houseLocalToTown, houseDoorNear, BALCONY_D } from './town.js';
 import { onSpace, setPlayerOverride, townXZ, nearTown, platform, keys } from './player.js';
+import { ride } from './ride.js';
 
 export const houseScene = new THREE.Scene();
 houseScene.background = new THREE.Color(0x14141a);
@@ -418,6 +419,7 @@ onSpace(() => {
     else exitToWorld(a.h, e.bx, a.h.d / 2 + BALCONY_D / 2, e.f * 3 + 0.16);
     return true;
   }
+  if (ride.camel >= 0) return false;   // верхом в дом не пускают — обычный прыжок
   if (platform) {            // стоим на балконе — внутрь через балконную дверь
     const ph = platform.house, it = built.get(ph.idx) || (built.set(ph.idx, buildInterior(ph)), built.get(ph.idx));
     const e = it.exits.find(x => x.kind === 'balcony' && x.f === platform.floor);
@@ -515,9 +517,10 @@ const controller = {
 // снаружи: подсказка у двери / на балконе (вызывается каждый кадр из main)
 export function updateHouse() {
   if (house.active) return;
-  if (platform) house.hint = 'Пробел — войти с балкона';
-  else if (nearTown && houseDoorNear(townXZ.x, townXZ.y)) house.hint = 'Пробел — войти в дом';
-  else house.hint = '';
+  const atEntrance = platform || (nearTown && houseDoorNear(townXZ.x, townXZ.y));
+  if (!atEntrance) house.hint = '';
+  else if (ride.camel >= 0) house.hint = 'Верхом в дом нельзя — слезьте (E)';
+  else house.hint = platform ? 'Пробел — войти с балкона' : 'Пробел — войти в дом';
 }
 // для отладки: войти в дом по номеру
 export const debugEnter = (idx, floor = 0) => {

@@ -115,7 +115,7 @@ export function updatePlayer(dt) {
   if (keys.has('KeyD') || keys.has('ArrowRight')) _move.add(_right);
   if (keys.has('KeyA') || keys.has('ArrowLeft')) _move.sub(_right);
   // в воде бредём вдвое медленнее
-  if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), P.SPEED * dt * (player.biome === BIOME.WATER ? 0.45 : 1));
+  if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), (P.SPEED + player.speedBonus) * dt * (player.biome === BIOME.WATER ? 0.45 : 1));
   collideWithTown();
   collideWithTrees();
   player.biome = biomeAt(_pd.copy(pos).normalize());
@@ -138,7 +138,7 @@ export function updatePlayer(dt) {
 
   // держим игрока на поверхности рельефа (R - h - EYE - jumpH) — это и есть "притяжение к внутренней поверхности"
   player.groundH = terrainH(_pd.x, _pd.y, _pd.z);   // _pd — направление на игрока (после коллизий)
-  pos.setLength(P.R - player.groundH - P.EYE - player.jumpH);
+  pos.setLength(P.R - player.groundH - P.EYE - player.jumpH - player.rideH);
 
   // камера: X = right, Y = up, Z = -forward, затем наклон по pitch
   camera.position.copy(pos);

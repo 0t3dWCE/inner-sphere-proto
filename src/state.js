@@ -61,6 +61,8 @@ export const player = {
   biome: 0,                                  // BIOME.GRASS; обновляется каждый кадр в updatePlayer
   groundH: 0,                                // высота рельефа под ногами (м), для HUD
   inside: null,                              // внутри дома: { house: idx, floor } — иначе null (house.js)
+  rideH: 0,                                  // подъём глаз над землёй, когда сидим на верблюде (ride.js)
+  speedBonus: 0,                             // прибавка к скорости ходьбы, м/с (ride.js)
 };
 
 // общие часы кадра: elapsedTime — анимации каравана и тумана войны, getDelta — в tick
