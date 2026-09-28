@@ -44,8 +44,9 @@ export function townPlatformAt(tx, tz, h = Infinity) {
 }
 const WALL_COLORS = [0xf1e3c8, 0xe9d5b3, 0xf6efe0, 0xd9c2a0, 0xf3d9c5, 0xe0e8f0];
 const townWallMat = fogify(new THREE.MeshStandardMaterial({ color: 0xb9a98c, roughness: 1, flatShading: true }));
-const townDarkMat = fogify(new THREE.MeshStandardMaterial({ color: 0x3a2f2a, roughness: .9 }));
 const townRailMat = fogify(new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: .7 }));
+const townDoorMat = fogify(new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: .8 }));                       // дерево
+const townGlassMat = fogify(new THREE.MeshStandardMaterial({ color: 0x8fc3e8, emissive: 0x3b6f95, emissiveIntensity: .35, roughness: .25 }));   // стекло
 
 const _tt = new THREE.Vector3(), _tu = new THREE.Vector3(), _tf = new THREE.Vector3(), _tr = new THREE.Vector3(), _m0 = new THREE.Matrix4();
 function placeTownObject(o) {
@@ -98,17 +99,9 @@ function makeHouse(w, d, floors, wallColor, roofColor) {
   }
   // дверь и окна на фасаде
   const doorX = (rand() - 0.5) * (w - 2);
-  const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2, 0.12), townDarkMat);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2, 0.12), townDoorMat);
   door.position.set(doorX, 1, d / 2 + 0.05);
   g.add(door);
-  const winGeo = new THREE.BoxGeometry(0.7, 0.9, 0.12);
-  for (let f = 0; f < floors; f++) {
-    for (const sx of [-1, 1]) {
-      const win = new THREE.Mesh(winGeo, townDarkMat);
-      win.position.set(sx * w / 4, f * 3 + 1.8, d / 2 + 0.05);
-      g.add(win);
-    }
-  }
   // балконы на верхних этажах (и балконная дверь за ними — через неё выходят изнутри)
   const balconies = [];
   for (let f = 1; f < floors; f++) {
@@ -121,10 +114,22 @@ function makeHouse(w, d, floors, wallColor, roofColor) {
     const railGeo = new THREE.BoxGeometry(0.06, 0.7, BALCONY_D);
     const railL = new THREE.Mesh(railGeo, townRailMat); railL.position.set(bx - 0.87, f * 3 + 0.5, d / 2 + BALCONY_D / 2);
     const railR = new THREE.Mesh(railGeo, townRailMat); railR.position.set(bx + 0.87, f * 3 + 0.5, d / 2 + BALCONY_D / 2);
-    const bdoor = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.9, 0.1), townDarkMat);
+    const bdoor = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.9, 0.1), townDoorMat);
     bdoor.position.set(bx, f * 3 + 1.1, d / 2 + 0.04);
     g.add(slab, railF, railL, railR, bdoor);
     balconies.push({ f, bx });
+  }
+  // окна на фасаде — после балконов (rand() не тратят), чтобы не ставить их поверх дверей
+  const winGeo = new THREE.BoxGeometry(0.7, 0.9, 0.12);
+  for (let f = 0; f < floors; f++) {
+    for (const sx of [-1, 1]) {
+      const wx = sx * w / 4;
+      if (f === 0 && Math.abs(wx - doorX) < 0.9) continue;                              // входная дверь
+      if (balconies.some(b => b.f === f && Math.abs(b.bx - wx) < 0.9)) continue;          // балконная дверь
+      const win = new THREE.Mesh(winGeo, townGlassMat);
+      win.position.set(wx, f * 3 + 1.8, d / 2 + 0.05);
+      g.add(win);
+    }
   }
   return { group: g, doorX, balconies };
 }
