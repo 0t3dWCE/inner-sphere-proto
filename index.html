@@ -94,11 +94,12 @@
       ['SKY_CLOUDS', 'Облачность',            0,      1,    0.05],
       ['HAZE',       'Дымка: дальность (м)',  20,     2000, 5],
       ['AMBIENCE',   'Звуки леса/города (0/1)', 0,    1,    1],
+      ['TERRAIN_H',  'Рельеф: высота холмов (м)', 0,  20,   0.5],
     ];
     const DEFAULTS = {
       R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45,
       FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35, CAMEL_SPEED: 2.5, SOUND_R: 25, VOLUME: 0.6,
-      SKY_H: 30, SKY_CLOUDS: 0.5, HAZE: 110, AMBIENCE: 1,
+      SKY_H: 30, SKY_CLOUDS: 0.5, HAZE: 110, AMBIENCE: 1, TERRAIN_H: 5,
     };
     const STORAGE_KEY = 'inner-sphere-params';
 
@@ -376,7 +377,7 @@
     // объект стоит "ногами" на стенке в точке с нормалью n (n — направление из центра к стенке)
     const props = [];   // { mesh, n, h } — чтобы переставлять при смене радиуса
     function placeOnWall(mesh, n, h) {
-      mesh.position.copy(n).multiplyScalar(P.R - h / 2);
+      mesh.position.copy(n).multiplyScalar(surfaceR(n) - h / 2);
       mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n.clone().negate()); // "верх" — к центру
     }
     function addProp(mesh, n, h) {
@@ -464,19 +465,94 @@
       const w = (fbm3(x * 2.2, y * 2.2, z * 2.2) - 0.5) * 0.5;                         // расшатанная граница ±~0.12 рад
       if (lat + w > BAND) return BIOME.FOREST;
       if (lat - w < -BAND) return BIOME.SAND;
-      const dLake = x * lakeDir.x + y * lakeDir.y + z * lakeDir.z;
-      if (dLake > Math.cos(LAKE_R + 0.1)) {
-        const a = Math.acos(Math.min(1, dLake)) + (fbm3(x * 6 + 13, y * 6, z * 6) - 0.5) * 0.12;
-        if (a < LAKE_R) return BIOME.WATER;
-        if (a < LAKE_R + 0.035) return BIOME.SAND;   // пляж
-      }
+      const a = lakeAngle(x, y, z);
+      if (a < LAKE_R) return BIOME.WATER;
+      if (a < LAKE_R + 0.035) return BIOME.SAND;   // пляж
       return BIOME.GRASS;
     }
     const biomeAt = d => biomeAtXYZ(d.x, d.y, d.z);
+    // угловое расстояние до центра озера с расшатанным берегом (Infinity — далеко); общее для биомов и рельефа
+    function lakeAngle(x, y, z) {
+      const d = x * lakeDir.x + y * lakeDir.y + z * lakeDir.z;
+      if (d < Math.cos(LAKE_R + 0.3)) return Infinity;
+      return Math.acos(Math.min(1, d)) + (fbm3(x * 6 + 13, y * 6, z * 6) - 0.5) * 0.12;
+    }
 
-    // карта биомов -> equirect DataTexture (цвета земли); вода темнеет к середине озера
-    const BIOME_RGB = [[0x6e, 0xb6, 0x5c], [0x4c, 0x8a, 0x40], [0xe8, 0xd6, 0x8e], [0x4a, 0x96, 0xd2]];
-    const DEEP_RGB = [0x2a, 0x5f, 0x9e];
+    // ---------- рельеф ----------
+    // Высота над "нулевым" радиусом R, положительная — к центру (холм), в метрах. Поверхность лежит на радиусе
+    // R - h(dir): одна функция для геометрии стенки и для всего, что на ней стоит (surfaceR). Под городом ровно
+    // (иначе коробки домов торчат углами), озеро — чаша ниже уровня воды с невысоким берегом, чтобы вода не
+    // выплёскивалась в соседние низины.
+    const LAKE_DEPTH = 3;
+    const TOWN_FLAT0 = 30 / DEFAULTS.R, TOWN_FLAT1 = 44 / DEFAULTS.R;   // поляна: ровно до 30 м, к 44 м — полный рельеф
+    const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    function terrainH(x, y, z) {
+      const A = P.TERRAIN_H;
+      if (A <= 0) return 0;
+      let h = A * Math.max(-1, Math.min(1, (fbm3(x * 3 + 21.7, y * 3 + 8.1, z * 3 + 3.3) - 0.5) * 4));
+      const aTown = Math.acos(Math.min(1, x * townDir.x + y * townDir.y + z * townDir.z));
+      h *= sstep(TOWN_FLAT0, TOWN_FLAT1, aTown);
+      const a = lakeAngle(x, y, z);
+      if (a < LAKE_R + 0.2) {
+        if (a < LAKE_R) return -0.15 - LAKE_DEPTH * Math.max(0, 1 - (a / LAKE_R) ** 2);   // чаша
+        const shore = Math.max(h, 0.25);                                                 // берег не ниже уровня воды
+        const s1 = sstep(LAKE_R, LAKE_R + 0.1, a), s2 = sstep(LAKE_R + 0.1, LAKE_R + 0.2, a);
+        const near = -0.15 + (shore + 0.15) * s1;
+        h = near + (h - near) * s2;
+      }
+      return h;
+    }
+    const surfaceR = d => P.R - terrainH(d.x, d.y, d.z);
+
+    // геометрия стенки с рельефом: плотная сфера, вершины сдвинуты по радиусу на -h
+    function buildTerrainGeometry(R) {
+      const g = new THREE.SphereGeometry(R, 512, 256);
+      const p = g.attributes.position, v = new THREE.Vector3();
+      for (let i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i).normalize();
+        const r = R - terrainH(v.x, v.y, v.z);
+        p.setXYZ(i, v.x * r, v.y * r, v.z * r);
+      }
+      g.computeVertexNormals();
+      return g;
+    }
+    // водная гладь: сферический "диск" на радиусе R (уровень воды h = 0) вокруг центра озера
+    function buildWaterGeometry(R) {
+      const RINGS = 10, SEG = 64, ang = LAKE_R + 0.08;
+      const u = new THREE.Vector3(), w = new THREE.Vector3(), d = new THREE.Vector3();
+      u.crossVectors(lakeDir, Math.abs(lakeDir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
+      w.crossVectors(lakeDir, u).normalize();
+      const posArr = [lakeDir.x * R, lakeDir.y * R, lakeDir.z * R], idx = [];
+      for (let r = 1; r <= RINGS; r++) {
+        const a = ang * r / RINGS;
+        for (let s = 0; s < SEG; s++) {
+          const phi = s / SEG * Math.PI * 2;
+          d.copy(lakeDir).multiplyScalar(Math.cos(a)).addScaledVector(u, Math.sin(a) * Math.cos(phi)).addScaledVector(w, Math.sin(a) * Math.sin(phi));
+          posArr.push(d.x * R, d.y * R, d.z * R);
+        }
+      }
+      const ring = r => 1 + (r - 1) * SEG;
+      for (let s = 0; s < SEG; s++) idx.push(0, ring(1) + s, ring(1) + (s + 1) % SEG);
+      for (let r = 1; r < RINGS; r++) for (let s = 0; s < SEG; s++) {
+        const a0 = ring(r) + s, a1 = ring(r) + (s + 1) % SEG, b0 = ring(r + 1) + s, b1 = ring(r + 1) + (s + 1) % SEG;
+        idx.push(a0, b0, a1, a1, b0, b1);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      return g;
+    }
+    const water = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      fogify(new THREE.MeshStandardMaterial({ color: 0x3f86c9, transparent: true, opacity: 0.72, roughness: 0.2, metalness: 0.1, side: THREE.DoubleSide }))
+    );
+    scene.add(water);
+
+    // карта биомов -> equirect DataTexture (цвета земли); под водой — илистое дно, темнеющее к середине
+    // (сама вода — полупрозрачная гладь поверх чаши рельефа)
+    const BIOME_RGB = [[0x6e, 0xb6, 0x5c], [0x4c, 0x8a, 0x40], [0xe8, 0xd6, 0x8e], [0xb4, 0xa4, 0x74]];
+    const DEEP_RGB = [0x50, 0x4c, 0x3a];
     const BM_W = 2048, BM_H = 1024;   // ~0.25 м/пиксель на экваторе при R=80; рисуется ~250 мс
     function paintBiomes() {
       const data = new Uint8Array(BM_W * BM_H * 4);
@@ -488,7 +564,7 @@
           const b = biomeAtXYZ(x, y, z);
           let c = BIOME_RGB[b];
           if (b === BIOME.WATER) {
-            const depth = Math.min(1, (LAKE_R - Math.acos(Math.min(1, x * lakeDir.x + y * lakeDir.y + z * lakeDir.z))) / LAKE_R * 1.6);
+            const depth = Math.min(1, (LAKE_R - lakeAngle(x, y, z)) / LAKE_R * 1.6);
             c = [0, 1, 2].map(k => c[k] + (DEEP_RGB[k] - c[k]) * depth);
           }
           const i = (py * BM_W + px) * 4;
@@ -535,15 +611,15 @@
     const _tq = new THREE.Quaternion(), _tq2 = new THREE.Quaternion(), _tp = new THREE.Vector3(), _ts = new THREE.Vector3(),
           _ty = new THREE.Vector3(0, 1, 0), _tm = new THREE.Matrix4();
     function placeTrees() {
-      const R = P.R;
       trees.forEach((t, i) => {
+        const sr = surfaceR(t.dir);
         _tq.setFromUnitVectors(_ty, _tp.copy(t.dir).negate());
         _tq.multiply(_tq2.setFromAxisAngle(_ty, t.yaw));
         _ts.set(t.h / 8, t.h * 0.24, t.h / 8);
-        trunkIM.setMatrixAt(i, _tm.compose(_tp.copy(t.dir).multiplyScalar(R - 0.05), _tq, _ts));
+        trunkIM.setMatrixAt(i, _tm.compose(_tp.copy(t.dir).multiplyScalar(sr - 0.05), _tq, _ts));
         TIERS.forEach(([y0, hh, rr], k) => {
           _ts.set(rr * t.h, hh * t.h, rr * t.h);
-          tierIM.setMatrixAt(i * 3 + k, _tm.compose(_tp.copy(t.dir).multiplyScalar(R - 0.05 - y0 * t.h), _tq, _ts));
+          tierIM.setMatrixAt(i * 3 + k, _tm.compose(_tp.copy(t.dir).multiplyScalar(sr - 0.05 - y0 * t.h), _tq, _ts));
         });
       });
       trunkIM.instanceMatrix.needsUpdate = true;
@@ -589,7 +665,7 @@
     function placeTownObject(o) {
       const { group, x, z, yaw } = o;
       townToDir(x, z, _tt);
-      group.position.copy(_tt).multiplyScalar(P.R - 0.02);
+      group.position.copy(_tt).multiplyScalar(surfaceR(_tt) - 0.02);
       _tu.copy(_tt).negate();
       _tf.copy(townEz).addScaledVector(_tu, -townEz.dot(_tu)).normalize();   // "север" города в этой точке
       _tr.crossVectors(_tu, _tf);
@@ -716,7 +792,9 @@
     function applyRadius() {
       const R = P.R;
       sphere.geometry.dispose();
-      sphere.geometry = new THREE.SphereGeometry(R, 128, 64);
+      sphere.geometry = buildTerrainGeometry(R);
+      water.geometry.dispose();
+      water.geometry = buildWaterGeometry(R);
       camera.far = R * 4;
       camera.updateProjectionMatrix();
       sun.intensity = 3 * R * R;
@@ -898,7 +976,8 @@
         _g.copy(b.mesh.position).normalize().multiplyScalar(P.GRAVITY);
         b.vel.addScaledVector(_g, dt);
         b.mesh.position.addScaledVector(b.vel, dt);
-        if (b.mesh.position.length() >= P.R - BALL_R) { landBall(b); balls.splice(i, 1); }
+        _pu.copy(b.mesh.position).normalize();
+        if (b.mesh.position.length() >= surfaceR(_pu) - BALL_R) { landBall(b); balls.splice(i, 1); }
       }
       // таблички: стоят на стенке (Y = к центру), лицевой стороной (+Z) к игроку
       for (const p of plaques) {
@@ -1447,7 +1526,7 @@
       }
       cv.camels.forEach((c, i) => {
         trailFrame(cv.s - i * spacing);
-        c.group.position.copy(_cd).multiplyScalar(R - 0.03);
+        c.group.position.copy(_cd).multiplyScalar(surfaceR(_cd) - 0.03);
         c.group.quaternion.setFromRotationMatrix(_m.makeBasis(_cr, _cu, _cf));
 
         // анимация: ноги асинхронно, шея и голова покачиваются, хвост машет, тело чуть подпрыгивает
@@ -1487,7 +1566,7 @@
         if (speed < 0) _cf.negate();                                                  // если караван стоит — разворачивается
         _cf.applyAxisAngle(_cu, yaw).normalize();
         _cr.crossVectors(_cu, _cf);
-        h.group.position.copy(_hd).multiplyScalar(R - 0.02);
+        h.group.position.copy(_hd).multiplyScalar(surfaceR(_hd) - 0.02);
         h.group.quaternion.setFromRotationMatrix(_m.makeBasis(_cr, _cu, _cf));
 
         // походка: ноги в противофазе, руки — противоположно ногам, темп от фактической скорости
@@ -1531,6 +1610,7 @@
       if (key === 'EYE') value = Math.min(value, P.R / 2);   // глаза не выше центра сферы
       P[key] = value;
       if (key === 'R') { P.EYE = Math.min(P.EYE, P.R / 2); inputs.EYE.value = P.EYE; applyRadius(); }
+      if (key === 'TERRAIN_H') applyRadius();   // рельеф зашит в геометрию и позиции объектов
       localStorage.setItem(STORAGE_KEY, JSON.stringify(P));
     }
     function syncInputs() { for (const k in inputs) inputs[k].value = P[k]; }
@@ -1571,7 +1651,7 @@
     if (location.search.includes('debug')) {
       window.dbg = {
         P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
-        biomeAt, BIOME, bioAxis, lakeDir, trees,
+        biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR,
         get audio() { return audio; },
         get playerBiome() { return playerBiome; },
         setPitch: v => { pitch = v; },
@@ -1633,8 +1713,9 @@
         if (jumpH === 0) jumpV = 0;
       }
 
-      // держим игрока на сфере радиуса (R - EYE - jumpH) — это и есть "притяжение к внутренней поверхности"
-      pos.setLength(P.R - P.EYE - jumpH);
+      // держим игрока на поверхности рельефа (R - h - EYE - jumpH) — это и есть "притяжение к внутренней поверхности"
+      const groundH = terrainH(_pd.x, _pd.y, _pd.z);   // _pd — направление на игрока (после коллизий)
+      pos.setLength(P.R - groundH - P.EYE - jumpH);
 
       // камера: X = right, Y = up, Z = -forward, затем наклон по pitch
       camera.position.copy(pos);
@@ -1677,7 +1758,7 @@
         (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '') +
         `  |  караван: ${(caravan.dir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
         `  |  город: ${(townDir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
-        `  |  под ногами: ${BIOME_NAME[playerBiome]}`;
+        `  |  под ногами: ${BIOME_NAME[playerBiome]} (${groundH >= 0 ? '+' : ''}${groundH.toFixed(1)} м)`;
 
       renderer.render(scene, camera);
       requestAnimationFrame(tick);
