@@ -90,10 +90,15 @@
       ['CAMEL_SPEED', 'Скорость каравана',    0,      30,   0.5],
       ['SOUND_R',    'Радиус звука каравана', 0,      200,  1],
       ['VOLUME',     'Громкость',             0,      1,    0.05],
+      ['SKY_H',      'Высота неба (0 — нет)', 0,      200,  1],
+      ['SKY_CLOUDS', 'Облачность',            0,      1,    0.05],
+      ['HAZE',       'Дымка: дальность (м)',  20,     2000, 5],
+      ['AMBIENCE',   'Звуки леса/города (0/1)', 0,    1,    1],
     ];
     const DEFAULTS = {
       R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45,
       FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35, CAMEL_SPEED: 2.5, SOUND_R: 25, VOLUME: 0.6,
+      SKY_H: 30, SKY_CLOUDS: 0.5, HAZE: 110, AMBIENCE: 1,
     };
     const STORAGE_KEY = 'inner-sphere-params';
 
@@ -125,7 +130,7 @@
     // Видим только "пузырь" радиусом FOW_R·R (по дуге сферы) вокруг игрока. Всё, что дальше, тонет в тумане.
     // Пройденные места запоминаются в карте разведки (equirect-текстура) и остаются видны приглушённо —
     // туман рассеивается там, где ты ходил. Край пузыря шевелится шумом, чтобы не выглядел как циркуль.
-    const SKY_COLOR = new THREE.Color(0xa9c7e0);
+    const SKY_COLOR = new THREE.Color(0xa8bccd);   // ≈ средний тон неба-сферы, чтобы дымка сливалась с ним
     const FOW_COLOR = new THREE.Color(0x141923);
     const EX_W = 512, EX_H = 256;
     const exploredData = new Uint8Array(EX_W * EX_H);
@@ -174,17 +179,24 @@
       }
     `;
     // подмешиваем туман войны в любой стандартный материал three.js
-    function fogify(mat) {
+    // extra(shader) — дополнительная правка шейдера (например, раскраска земли по биомам)
+    function fogify(mat, extra) {
       mat.onBeforeCompile = shader => {
         Object.assign(shader.uniforms, fowUniforms);
         shader.vertexShader = shader.vertexShader
           .replace('#include <common>', '#include <common>\nvarying vec3 vFowWorldPos;')
-          .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFowWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+          .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+            vec4 fowWP = vec4(transformed, 1.0);
+            #ifdef USE_INSTANCING
+              fowWP = instanceMatrix * fowWP;
+            #endif
+            vFowWorldPos = (modelMatrix * fowWP).xyz;`);
         shader.fragmentShader = shader.fragmentShader
           .replace('#include <common>', '#include <common>\n' + FOW_FRAG_PRELUDE)
           .replace('#include <fog_fragment>', '#include <fog_fragment>\n' + FOW_FRAG_MAIN);
+        if (extra) extra(shader);
       };
-      mat.customProgramCacheKey = () => 'fow';
+      mat.customProgramCacheKey = () => 'fow' + (extra ? '+' + extra.name : '');
       return mat;
     }
 
@@ -233,14 +245,14 @@
       const c = document.createElement('canvas');
       c.width = c.height = 512;
       const g = c.getContext('2d');
-      g.fillStyle = '#5c9a4c';
+      // нейтральная плитка: цвет даёт карта биомов (умножается в шейдере), здесь — только шахматка и сетка
+      g.fillStyle = '#d6d6d6';
       g.fillRect(0, 0, 512, 512);
-      // шахматная подложка
-      g.fillStyle = '#548f46';
+      g.fillStyle = '#c8c8c8';
       for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++)
         if ((x + y) % 2) g.fillRect(x * 128, y * 128, 128, 128);
       // сетка
-      g.strokeStyle = 'rgba(255,255,255,.35)';
+      g.strokeStyle = 'rgba(255,255,255,.45)';
       g.lineWidth = 3;
       for (let i = 0; i <= 4; i++) {
         g.beginPath(); g.moveTo(i * 128, 0); g.lineTo(i * 128, 512); g.stroke();
@@ -253,9 +265,22 @@
       return t;
     }
 
+    // карта биомов (equirect, заполняется ниже в paintBiomes) — цвет земли = плитка × биом
+    const biomeUniforms = { uBiome: { value: null } };
+    function groundShader(shader) {
+      Object.assign(shader.uniforms, biomeUniforms);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform sampler2D uBiome;')
+        .replace('#include <map_fragment>', `#include <map_fragment>
+          {
+            vec3 bd = normalize(vFowWorldPos);
+            vec2 buv = vec2(atan(bd.z, bd.x) / 6.2831853 + 0.5, asin(clamp(bd.y, -1.0, 1.0)) / 3.1415927 + 0.5);
+            diffuseColor.rgb *= texture2D(uBiome, buv).rgb;
+          }`);
+    }
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(1, 128, 64),
-      fogify(new THREE.MeshStandardMaterial({ map: makeGridTexture(), side: THREE.BackSide, roughness: 1 }))
+      fogify(new THREE.MeshStandardMaterial({ map: makeGridTexture(), side: THREE.BackSide, roughness: 1 }), groundShader)
     );
     scene.add(sphere);
 
@@ -268,6 +293,84 @@
       new THREE.MeshBasicMaterial({ color: 0xfff1b0, fog: false })
     );
     scene.add(sunBall);
+
+    // ---------- небо: внутренняя сфера-атмосфера ----------
+    // Концентрическая сфера радиусом R - SKY_H, смотрим на неё снаружи (FrontSide) — это зенит и облака.
+    // Сама по себе горизонт она не даёт: при R=80 и зазоре 30 м она видна лишь выше ~50° над горизонтом,
+    // а дальняя стенка остаётся видна ниже. Горизонт делает дымка (scene.fog цвета неба, дальность HAZE):
+    // стенка дальше HAZE растворяется в цвете неба, и небо-сфера тонет в той же дымке, чтобы её край не
+    // читался как круг. Облака — fbm-шум по направлению, медленно дрейфуют; солнечное пятно и засветка.
+    // Туман войны применяется и к небу (общие fowUniforms), иначе яркий шар висит над чёрной землёй.
+    const skyUniforms = {
+      uSky:       { value: new THREE.Color(0x9cb4cc) },
+      uSkyLow:    { value: new THREE.Color(0xb2c2d0) },
+      uCloud:     { value: new THREE.Color(0xf5f7f9) },
+      uCloudDark: { value: new THREE.Color(0x9aa4ae) },
+      uCoverage:  { value: 0.5 },
+      uSunDir:    { value: new THREE.Vector3(0.35, 0.8, 0.49).normalize() },
+    };
+    // fog: true — небо тонет в той же дымке, что и стенка, поэтому его край не читается как круг
+    const skyMat = new THREE.ShaderMaterial({
+      // merge() клонирует, а fowUniforms нужны общими — подмешиваем их после
+      uniforms: Object.assign(THREE.UniformsUtils.merge([THREE.UniformsLib.fog, skyUniforms]), fowUniforms),
+      fog: true,
+      vertexShader: /* glsl */`
+        #include <fog_pars_vertex>
+        varying vec3 vDir; varying vec3 vFowWorldPos;
+        void main() {
+          vDir = position;
+          vFowWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mvPosition;
+          #include <fog_vertex>
+        }
+      `,
+      fragmentShader: /* glsl */`
+        #include <fog_pars_fragment>
+        ${FOW_FRAG_PRELUDE}
+        uniform vec3 uSky, uSkyLow, uCloud, uCloudDark, uSunDir; uniform float uCoverage;
+        varying vec3 vDir;
+        float hash(vec3 p) { p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3)); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+        float noise(vec3 x) {
+          vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                     mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+        }
+        float fbm(vec3 p) {
+          float v = 0.0, a = 0.5;
+          for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + vec3(7.1, 3.3, 1.7); a *= 0.5; }
+          return v;
+        }
+        void main() {
+          vec3 d = normalize(vDir);
+          float t = uTime * 0.012;
+          // два слоя облаков на разных высотах/скоростях
+          float n1 = fbm(d * 3.2 + vec3(t * 2.0, 0.0, t));
+          float n2 = fbm(d * 7.0 - vec3(t * 3.5, t * 0.7, 0.0));
+          // fbm даёт узкий разброс (~0.35..0.65) — растягиваем, иначе облака едва проступают
+          float n = (n1 * 0.7 + n2 * 0.3 - 0.48) * 2.4 + 0.5;
+          float th = mix(0.95, 0.30, uCoverage);
+          float cov = smoothstep(th, th + 0.14, n);
+          float thick = smoothstep(th + 0.12, th + 0.45, n);
+          vec3 cloud = mix(uCloud, uCloudDark, thick * 0.65);
+          // фон: лёгкая пятнистость, чтобы небо не было плоской заливкой
+          vec3 sky = mix(uSkyLow, uSky, smoothstep(0.3, 0.7, n1));
+          vec3 col = mix(sky, cloud, cov);
+          // солнце: диск + ореол + общая засветка со стороны солнца
+          float s = dot(d, uSunDir);
+          col *= 0.95 + 0.1 * max(s, 0.0);
+          col += vec3(1.0, 0.96, 0.85) * (smoothstep(0.9965, 0.9992, s) * 0.9 + pow(max(s, 0.0), 40.0) * 0.3) * (1.0 - cov * 0.8);
+          gl_FragColor = vec4(col, 1.0);
+          #include <colorspace_fragment>
+          #include <fog_fragment>
+          ${FOW_FRAG_MAIN}
+        }
+      `,
+      side: THREE.FrontSide,
+    });
+    const skyU = skyMat.uniforms;   // merge() клонирует униформы — обновлять надо эти
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), skyMat);
+    scene.add(sky);
 
     // ---------- объекты на внутренней поверхности ----------
     // объект стоит "ногами" на стенке в точке с нормалью n (n — направление из центра к стенке)
@@ -287,6 +390,167 @@
     }
 
     const palette = [0xe4572e, 0x17bebb, 0xffc914, 0x2e282a, 0x76b041, 0x9b5de5, 0xf15bb5];
+
+    // ---------- городок: где стоит ----------
+    // Старт игрока — на "экваторе" в START_DIR; город ставим в ~0.6 рад от него (≈48 м при R=80) со случайным азимутом.
+    const START_DIR = new THREE.Vector3(1, 0, 0);
+    const TOWN_H = 20;                      // полуразмер: стена на ±TOWN_H (м)
+    const TOWN_STREET = 5;                  // ширина улиц (м)
+    const TOWN_WALL_H = 2.2;
+    const TOWN_AVOID = TOWN_H * 1.42 + 4;   // радиус (м), внутрь которого караван не заходит — отскакивает
+    const townDir = (() => {
+      const az = Math.random() * Math.PI * 2;
+      const t = new THREE.Vector3(0, Math.cos(az), Math.sin(az));     // касательная в START_DIR
+      return START_DIR.clone().multiplyScalar(Math.cos(0.6)).addScaledVector(t, Math.sin(0.6)).normalize();
+    })();
+    // локальные оси города в касательной плоскости; "верх" объектов — к центру (-townDir)
+    const townEx = new THREE.Vector3(), townEz = new THREE.Vector3();
+    {
+      const ref = Math.abs(townDir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      townEx.crossVectors(ref, townDir).normalize();
+      townEz.crossVectors(townDir, townEx).normalize();
+    }
+    // локальные координаты города (x, z в метрах по поверхности) <-> направление на сфере (экспоненциальное отображение)
+    const _tt = new THREE.Vector3(), _tt2 = new THREE.Vector3();
+    function townToDir(x, z, out) {     // out не должен совпадать с _tt2
+      const r = Math.hypot(x, z);
+      if (r < 1e-6) return out.copy(townDir);
+      const a = r / P.R;
+      _tt2.copy(townEx).multiplyScalar(x / r).addScaledVector(townEz, z / r);
+      return out.copy(townDir).multiplyScalar(Math.cos(a)).addScaledVector(_tt2, Math.sin(a)).normalize();
+    }
+    function dirToTown(dir, out) {
+      const a = dir.angleTo(townDir);
+      if (a < 1e-6) return out.set(0, 0);
+      _tt2.copy(dir).addScaledVector(townDir, -Math.cos(a)).divideScalar(Math.sin(a));
+      return out.set(a * P.R * _tt2.dot(townEx), a * P.R * _tt2.dot(townEz));
+    }
+
+    // ---------- биомы: трава, лес, песок, вода ----------
+    // Сфера делится "широтой" относительно оси bioAxis: шапка |lat| > BAND с одной стороны — лес, с другой — песок.
+    // Площадь шапки = (1 - sin BAND)/2, при sin BAND = 0.3 это ровно 35% на каждую; между ними полоса травы (30%)
+    // с озером. Ось выбрана так, что старт игрока и город лежат на "экваторе" — на траве; озеро тоже на этом
+    // большом круге, с противоположной от города стороны. Границы шапок и берег озера расшатаны fbm-шумом,
+    // вокруг города — круглая поляна (иначе ёлки лезли бы за стену).
+    const BIOME = { GRASS: 0, FOREST: 1, SAND: 2, WATER: 3 };
+    const BIOME_NAME = ['трава', 'лес', 'песок', 'вода'];
+    const BAND = Math.asin(0.3);            // полуширина полосы травы (рад)
+    const LAKE_R = 0.25;                    // угловой радиус озера (рад) ≈ 20 м при R=80
+    const TOWN_CLEAR = TOWN_AVOID / DEFAULTS.R;   // поляна вокруг города (рад)
+    const bioE1 = START_DIR.clone();
+    const bioE2 = townDir.clone().addScaledVector(bioE1, -bioE1.dot(townDir)).normalize();
+    const bioAxis = new THREE.Vector3().crossVectors(bioE1, bioE2).normalize();   // центр леса; -bioAxis — центр песков
+    const lakeDir = bioE1.clone().multiplyScalar(Math.cos(-1.4)).addScaledVector(bioE2, Math.sin(-1.4)).normalize();
+
+    // value-noise на CPU (та же идея, что в шейдерах), чтобы карта биомов и логика считались одной функцией
+    function vhash(x, y, z) { const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return h - Math.floor(h); }
+    function vnoise(x, y, z) {
+      const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+      let fx = x - ix, fy = y - iy, fz = z - iz;
+      fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy); fz = fz * fz * (3 - 2 * fz);
+      const l = (a, b, t) => a + (b - a) * t;
+      return l(l(l(vhash(ix, iy, iz), vhash(ix + 1, iy, iz), fx), l(vhash(ix, iy + 1, iz), vhash(ix + 1, iy + 1, iz), fx), fy),
+               l(l(vhash(ix, iy, iz + 1), vhash(ix + 1, iy, iz + 1), fx), l(vhash(ix, iy + 1, iz + 1), vhash(ix + 1, iy + 1, iz + 1), fx), fy), fz);
+    }
+    function fbm3(x, y, z) {
+      return vnoise(x, y, z) * 0.55 + vnoise(x * 2.1 + 5.2, y * 2.1 + 1.3, z * 2.1 + 7.7) * 0.3 + vnoise(x * 4.3 + 9.1, y * 4.3 + 2.2, z * 4.3 + 3.9) * 0.15;
+    }
+    // биом по направлению (x, y, z — единичный вектор); shore=true даёт SAND на узкой полосе пляжа вокруг озера
+    function biomeAtXYZ(x, y, z) {
+      const dTown = x * townDir.x + y * townDir.y + z * townDir.z;
+      if (dTown > Math.cos(TOWN_CLEAR)) return BIOME.GRASS;
+      const lat = Math.asin(Math.max(-1, Math.min(1, x * bioAxis.x + y * bioAxis.y + z * bioAxis.z)));
+      if (Math.abs(lat) > BAND + 0.14) return lat > 0 ? BIOME.FOREST : BIOME.SAND;   // далеко от границы — шум не нужен
+      const w = (fbm3(x * 2.2, y * 2.2, z * 2.2) - 0.5) * 0.5;                         // расшатанная граница ±~0.12 рад
+      if (lat + w > BAND) return BIOME.FOREST;
+      if (lat - w < -BAND) return BIOME.SAND;
+      const dLake = x * lakeDir.x + y * lakeDir.y + z * lakeDir.z;
+      if (dLake > Math.cos(LAKE_R + 0.1)) {
+        const a = Math.acos(Math.min(1, dLake)) + (fbm3(x * 6 + 13, y * 6, z * 6) - 0.5) * 0.12;
+        if (a < LAKE_R) return BIOME.WATER;
+        if (a < LAKE_R + 0.035) return BIOME.SAND;   // пляж
+      }
+      return BIOME.GRASS;
+    }
+    const biomeAt = d => biomeAtXYZ(d.x, d.y, d.z);
+
+    // карта биомов -> equirect DataTexture (цвета земли); вода темнеет к середине озера
+    const BIOME_RGB = [[0x6e, 0xb6, 0x5c], [0x4c, 0x8a, 0x40], [0xe8, 0xd6, 0x8e], [0x4a, 0x96, 0xd2]];
+    const DEEP_RGB = [0x2a, 0x5f, 0x9e];
+    const BM_W = 2048, BM_H = 1024;   // ~0.25 м/пиксель на экваторе при R=80; рисуется ~250 мс
+    function paintBiomes() {
+      const data = new Uint8Array(BM_W * BM_H * 4);
+      for (let py = 0; py < BM_H; py++) {
+        const lat = ((py + 0.5) / BM_H - 0.5) * Math.PI, cl = Math.cos(lat), sl = Math.sin(lat);
+        for (let px = 0; px < BM_W; px++) {
+          const lon = ((px + 0.5) / BM_W - 0.5) * 2 * Math.PI;
+          const x = cl * Math.cos(lon), y = sl, z = cl * Math.sin(lon);
+          const b = biomeAtXYZ(x, y, z);
+          let c = BIOME_RGB[b];
+          if (b === BIOME.WATER) {
+            const depth = Math.min(1, (LAKE_R - Math.acos(Math.min(1, x * lakeDir.x + y * lakeDir.y + z * lakeDir.z))) / LAKE_R * 1.6);
+            c = [0, 1, 2].map(k => c[k] + (DEEP_RGB[k] - c[k]) * depth);
+          }
+          const i = (py * BM_W + px) * 4;
+          data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 255;
+        }
+      }
+      const tex = new THREE.DataTexture(data, BM_W, BM_H, THREE.RGBAFormat);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.needsUpdate = true;
+      biomeUniforms.uBiome.value = tex;
+    }
+    paintBiomes();
+
+    // ---------- лес: ёлки ----------
+    // Ствол + три яруса-конуса, всё инстансами (две InstancedMesh на весь лес). Высоты 4..12 м, у каждой ёлки
+    // свой оттенок. Расставляются rejection sampling'ом по случайным направлениям, пока не попадут в лес.
+    const TREE_N = 750;
+    const trees = [];   // { dir, h, yaw }
+    for (let tries = 0; trees.length < TREE_N && tries < 40000; tries++) {
+      const d = randomDir();
+      if (biomeAt(d) !== BIOME.FOREST) continue;
+      const u = Math.random();
+      trees.push({ dir: d, h: 4 + u * u * 8, yaw: Math.random() * Math.PI * 2 });
+    }
+    const trunkGeo = new THREE.CylinderGeometry(0.16, 0.26, 1, 6).translate(0, 0.5, 0);   // основание в y=0, высота 1
+    const tierGeo = new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0);
+    const trunkMat = fogify(new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 1, flatShading: true }));
+    const tierMat = fogify(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .9, flatShading: true }));
+    const trunkIM = new THREE.InstancedMesh(trunkGeo, trunkMat, trees.length);
+    const tierIM = new THREE.InstancedMesh(tierGeo, tierMat, trees.length * 3);
+    trunkIM.frustumCulled = tierIM.frustumCulled = false;
+    scene.add(trunkIM, tierIM);
+    const TIERS = [[0.18, 0.42, 0.27], [0.40, 0.38, 0.21], [0.62, 0.38, 0.15]];   // [низ, высота, радиус] в долях h
+    {
+      const c = new THREE.Color();
+      trees.forEach((t, i) => {
+        c.setHSL(0.33 + (Math.random() - 0.5) * 0.06, 0.45 + Math.random() * 0.2, 0.22 + Math.random() * 0.12);
+        for (let k = 0; k < 3; k++) tierIM.setColorAt(i * 3 + k, c);
+      });
+      tierIM.instanceColor.needsUpdate = true;
+    }
+    const _tq = new THREE.Quaternion(), _tq2 = new THREE.Quaternion(), _tp = new THREE.Vector3(), _ts = new THREE.Vector3(),
+          _ty = new THREE.Vector3(0, 1, 0), _tm = new THREE.Matrix4();
+    function placeTrees() {
+      const R = P.R;
+      trees.forEach((t, i) => {
+        _tq.setFromUnitVectors(_ty, _tp.copy(t.dir).negate());
+        _tq.multiply(_tq2.setFromAxisAngle(_ty, t.yaw));
+        _ts.set(t.h / 8, t.h * 0.24, t.h / 8);
+        trunkIM.setMatrixAt(i, _tm.compose(_tp.copy(t.dir).multiplyScalar(R - 0.05), _tq, _ts));
+        TIERS.forEach(([y0, hh, rr], k) => {
+          _ts.set(rr * t.h, hh * t.h, rr * t.h);
+          tierIM.setMatrixAt(i * 3 + k, _tm.compose(_tp.copy(t.dir).multiplyScalar(R - 0.05 - y0 * t.h), _tq, _ts));
+        });
+      });
+      trunkIM.instanceMatrix.needsUpdate = true;
+      tierIM.instanceMatrix.needsUpdate = true;
+    }
+
+    // цветные пропсы — только на траве и песке (в лесу ёлки, в воде — нечего)
     for (let i = 0; i < 90; i++) {
       const h = 2 + Math.random() * 6;
       const w = 1 + Math.random() * 3;
@@ -294,7 +558,10 @@
         Math.random() < 0.5 ? new THREE.BoxGeometry(w, h, w) : new THREE.CylinderGeometry(w / 2, w / 2, h, 12),
         fogify(new THREE.MeshStandardMaterial({ color: palette[i % palette.length], roughness: .8 }))
       );
-      addProp(mesh, randomDir(), h);
+      let n, b;
+      do { n = randomDir(); b = biomeAt(n); }
+      while (n.angleTo(townDir) * P.R < TOWN_H * 1.7 || b === BIOME.FOREST || b === BIOME.WATER);
+      addProp(mesh, n, h);
     }
     // несколько высоких "маяков" — ориентиры, хорошо видны на уходящем вверх горизонте
     for (let i = 0; i < 6; i++) {
@@ -302,29 +569,215 @@
         new THREE.CylinderGeometry(0.4, 0.6, 18, 10),
         fogify(new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff4040, emissiveIntensity: .6 }))
       );
-      addProp(pole, randomDir(), 18);
+      let n;
+      do n = randomDir(); while (biomeAt(n) === BIOME.WATER);
+      addProp(pole, n, 18);
     }
+
+    // ---------- городок: постройки ----------
+    // Две улицы крест-накрест, по 4 дома в каждом квартале (1–3 этажа, балконы, цветные крыши),
+    // невысокая стена с воротами на концах улиц и башенками по углам. Каждый объект ставится на сферу
+    // отдельно (со своей нормалью), иначе на краях города они бы висели в воздухе из-за кривизны.
+    const townObjects = [];     // { group, x, z, yaw } — чтобы переставлять при смене радиуса
+    const townObstacles = [];   // AABB в локальных координатах города: { x0, z0, x1, z1 }
+    const WALL_COLORS = [0xf1e3c8, 0xe9d5b3, 0xf6efe0, 0xd9c2a0, 0xf3d9c5, 0xe0e8f0];
+    const townWallMat = fogify(new THREE.MeshStandardMaterial({ color: 0xb9a98c, roughness: 1, flatShading: true }));
+    const townDarkMat = fogify(new THREE.MeshStandardMaterial({ color: 0x3a2f2a, roughness: .9 }));
+    const townRailMat = fogify(new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: .7 }));
+
+    const _tu = new THREE.Vector3(), _tf = new THREE.Vector3(), _tr = new THREE.Vector3(), _m0 = new THREE.Matrix4();
+    function placeTownObject(o) {
+      const { group, x, z, yaw } = o;
+      townToDir(x, z, _tt);
+      group.position.copy(_tt).multiplyScalar(P.R - 0.02);
+      _tu.copy(_tt).negate();
+      _tf.copy(townEz).addScaledVector(_tu, -townEz.dot(_tu)).normalize();   // "север" города в этой точке
+      _tr.crossVectors(_tu, _tf);
+      group.quaternion.setFromRotationMatrix(_m0.makeBasis(_tr, _tu, _tf));
+      group.rotateY(yaw);
+    }
+    function addTownObject(group, x, z, yaw = 0) {
+      const o = { group, x, z, yaw };
+      townObjects.push(o);
+      placeTownObject(o);
+      scene.add(group);
+      return o;
+    }
+    function addObstacle(cx, cz, w, d) {
+      townObstacles.push({ x0: cx - w / 2, z0: cz - d / 2, x1: cx + w / 2, z1: cz + d / 2 });
+    }
+
+    // дом: начало координат — на земле по центру, фасад смотрит в +Z
+    function makeHouse(w, d, floors, wallColor, roofColor) {
+      const g = new THREE.Group();
+      const H = floors * 3;
+      const wall = fogify(new THREE.MeshStandardMaterial({ color: wallColor, roughness: .95 }));
+      const roof = fogify(new THREE.MeshStandardMaterial({ color: roofColor, roughness: .8, flatShading: true }));
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, H, d), wall);
+      body.position.y = H / 2;
+      g.add(body);
+      // крыша: четырёхскатная или плоская с парапетом
+      if (Math.random() < 0.65) {
+        // пирамида: конус с 4 гранями, повёрнутый на 45° (углы на ±0.707) и растянутый под прямоугольник со свесом
+        const rh = 1.6 + Math.random();
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(1, rh, 4), roof);
+        cone.rotation.y = Math.PI / 4;
+        cone.scale.set((w / 2 + 0.35) / Math.SQRT1_2, 1, (d / 2 + 0.35) / Math.SQRT1_2);
+        cone.position.y = H + rh / 2;
+        g.add(cone);
+      } else {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.3, d + 0.4), roof);
+        slab.position.y = H + 0.15;
+        g.add(slab);
+        const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.5, 0.2), roof);
+        parapet.position.set(0, H + 0.55, d / 2 + 0.1);
+        g.add(parapet);
+      }
+      // дверь и окна на фасаде
+      const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2, 0.12), townDarkMat);
+      door.position.set((Math.random() - 0.5) * (w - 2), 1, d / 2 + 0.05);
+      g.add(door);
+      const winGeo = new THREE.BoxGeometry(0.7, 0.9, 0.12);
+      for (let f = 0; f < floors; f++) {
+        for (const sx of [-1, 1]) {
+          const win = new THREE.Mesh(winGeo, townDarkMat);
+          win.position.set(sx * w / 4, f * 3 + 1.8, d / 2 + 0.05);
+          g.add(win);
+        }
+      }
+      // балконы на верхних этажах
+      for (let f = 1; f < floors; f++) {
+        if (Math.random() < 0.3) continue;
+        const bx = (Math.random() < 0.5 ? -1 : 1) * w / 4;
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.14, 1.0), wall);
+        slab.position.set(bx, f * 3 + 0.07, d / 2 + 0.5);
+        const railF = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 0.06), townRailMat);
+        railF.position.set(bx, f * 3 + 0.5, d / 2 + 0.97);
+        const railGeo = new THREE.BoxGeometry(0.06, 0.7, 1.0);
+        const railL = new THREE.Mesh(railGeo, townRailMat); railL.position.set(bx - 0.87, f * 3 + 0.5, d / 2 + 0.5);
+        const railR = new THREE.Mesh(railGeo, townRailMat); railR.position.set(bx + 0.87, f * 3 + 0.5, d / 2 + 0.5);
+        g.add(slab, railF, railL, railR);
+      }
+      return g;
+    }
+
+    (function buildTown() {
+      // дома: в каждом квартале 2×2 участка, фасадом к ближайшей улице
+      const slots = [TOWN_STREET / 2 + 4.2, TOWN_STREET / 2 + 11.5];
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const cx of slots) for (const cz of slots) {
+        const w = 4 + Math.random() * 2.2, d = 4 + Math.random() * 2.2;
+        const floors = 1 + Math.floor(Math.random() * 3);
+        const house = makeHouse(w, d, floors,
+          WALL_COLORS[Math.floor(Math.random() * WALL_COLORS.length)],
+          palette[Math.floor(Math.random() * palette.length)]);
+        const x = sx * cx, z = sz * cz;
+        // фасад — к ближайшей улице: yaw поворачивает +Z в направлении v
+        const v = cx < cz ? [-sx, 0] : [0, -sz];
+        addTownObject(house, x, z, Math.atan2(v[0], v[1]));
+        // AABB: дом повёрнут на кратное 90°, поэтому при повороте на ±90° w и d меняются местами
+        const swap = Math.abs(v[0]) > 0;
+        addObstacle(x, z, swap ? d : w, swap ? w : d);
+      }
+      // стена: сегменты по 4 м, ворота шириной 7 м на концах улиц
+      const seg = 4, half = TOWN_H, gate = 3.5;
+      for (let c = -half + seg / 2; c < half; c += seg) {
+        if (Math.abs(c) < gate) continue;
+        for (const s of [-1, 1]) {
+          const wz = new THREE.Mesh(new THREE.BoxGeometry(seg + 0.15, TOWN_WALL_H, 0.8), townWallMat);
+          wz.position.y = TOWN_WALL_H / 2;
+          addTownObject(new THREE.Group().add(wz), c, s * half, 0);
+          addObstacle(c, s * half, seg + 0.15, 0.8);
+          const wx = new THREE.Mesh(new THREE.BoxGeometry(0.8, TOWN_WALL_H, seg + 0.15), townWallMat);
+          wx.position.y = TOWN_WALL_H / 2;
+          addTownObject(new THREE.Group().add(wx), s * half, c, 0);
+          addObstacle(s * half, c, 0.8, seg + 0.15);
+        }
+      }
+      // угловые башенки и столбы ворот
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const t = new THREE.Mesh(new THREE.BoxGeometry(2, 3.4, 2), townWallMat);
+        t.position.y = 1.7;
+        const cap = new THREE.Mesh(new THREE.ConeGeometry(1.6, 1.2, 4), fogify(new THREE.MeshStandardMaterial({ color: 0x8c3b2e, flatShading: true })));
+        cap.position.y = 4.0; cap.rotation.y = Math.PI / 4;
+        addTownObject(new THREE.Group().add(t, cap), sx * half, sz * half, 0);
+        addObstacle(sx * half, sz * half, 2, 2);
+      }
+      for (const s of [-1, 1]) for (const g of [-gate, gate]) {
+        const p1 = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 1), townWallMat); p1.position.y = 1.5;
+        addTownObject(new THREE.Group().add(p1), g, s * half, 0);
+        addObstacle(g, s * half, 1, 1);
+        const p2 = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 1), townWallMat); p2.position.y = 1.5;
+        addTownObject(new THREE.Group().add(p2), s * half, g, 0);
+        addObstacle(s * half, g, 1, 1);
+      }
+    })();
 
     // всё, что зависит от радиуса: геометрия сферы, туман, свет, дальность камеры, позиции объектов
     function applyRadius() {
       const R = P.R;
       sphere.geometry.dispose();
       sphere.geometry = new THREE.SphereGeometry(R, 128, 64);
-      scene.fog.near = R * 0.9;
-      scene.fog.far = R * 3.2;
       camera.far = R * 4;
       camera.updateProjectionMatrix();
       sun.intensity = 3 * R * R;
       for (const p of props) placeOnWall(p.mesh, p.n, p.h);
+      for (const o of townObjects) placeTownObject(o);
+      placeTrees();
     }
     applyRadius();
 
     // ---------- игрок ----------
     // pos — позиция глаз. Гравитация направлена от центра к стенке, поэтому "верх" = -normalize(pos)
-    const pos = new THREE.Vector3(P.R - P.EYE, 0, 0);    // стартуем на "экваторе" (вдали от полюсов UV-сетки)
+    const pos = START_DIR.clone().multiplyScalar(P.R - P.EYE);   // стартуем на "экваторе" (вдали от полюсов UV-сетки)
     const forward = new THREE.Vector3(0, 0, -1);         // касательное направление взгляда
     let pitch = 0;                                       // наклон камеры вверх/вниз
     let jumpH = 0, jumpV = 0;                            // высота над стенкой (прыжок) и скорость
+
+    // коллизии игрока с домами и стеной: круг радиуса PLAYER_RAD против AABB в локальных координатах города
+    const PLAYER_RAD = 0.45;
+    const _pl = new THREE.Vector2(), _pd = new THREE.Vector3();
+    function collideWithTown() {
+      _pd.copy(pos).normalize();
+      if (_pd.angleTo(townDir) * P.R > TOWN_H * 1.6) return;
+      dirToTown(_pd, _pl);
+      let moved = false;
+      for (const o of townObstacles) {
+        const cx = THREE.MathUtils.clamp(_pl.x, o.x0, o.x1), cz = THREE.MathUtils.clamp(_pl.y, o.z0, o.z1);
+        const dx = _pl.x - cx, dz = _pl.y - cz, d2 = dx * dx + dz * dz;
+        if (d2 >= PLAYER_RAD * PLAYER_RAD) continue;
+        if (d2 < 1e-9) {
+          // оказались внутри — выталкиваем через ближайшую грань
+          const pen = [_pl.x - o.x0, o.x1 - _pl.x, _pl.y - o.z0, o.z1 - _pl.y];
+          const k = pen.indexOf(Math.min(...pen));
+          if (k === 0) _pl.x = o.x0 - PLAYER_RAD; else if (k === 1) _pl.x = o.x1 + PLAYER_RAD;
+          else if (k === 2) _pl.y = o.z0 - PLAYER_RAD; else _pl.y = o.z1 + PLAYER_RAD;
+        } else {
+          const d = Math.sqrt(d2);
+          _pl.x = cx + dx / d * PLAYER_RAD;
+          _pl.y = cz + dz / d * PLAYER_RAD;
+        }
+        moved = true;
+      }
+      if (moved) { townToDir(_pl.x, _pl.y, _pd); pos.copy(_pd).multiplyScalar(pos.length()); }
+    }
+    // коллизии со стволами: круг против круга по дуге (900 скалярных произведений в кадр — дёшево)
+    const _tc = new THREE.Vector3();
+    function collideWithTrees() {
+      _pd.copy(pos).normalize();
+      const R = P.R, len = pos.length();
+      for (const t of trees) {
+        const minA = (PLAYER_RAD + t.h * 0.27 * 0.65) / R;   // не даём залезть камерой в крону (нижний ярус r = 0.27h)
+        const cosA = _pd.dot(t.dir);
+        if (cosA < Math.cos(minA)) continue;
+        const a = Math.acos(Math.min(1, cosA));
+        // отталкиваем от ствола в касательной плоскости
+        _tc.copy(_pd).addScaledVector(t.dir, -cosA);
+        if (_tc.lengthSq() < 1e-12) _tc.copy(forward);
+        _tc.normalize();
+        _pd.addScaledVector(_tc, minA - a).normalize();
+        pos.copy(_pd).multiplyScalar(len);
+      }
+    }
 
     const isTyping = e => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
     const keys = new Set();
@@ -630,8 +1083,244 @@
       const noise = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.25), ctx.sampleRate);
       const d = noise.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-      audio = { ctx, listener, bus, positional, noise };
+
+      // --- лес: без позиции (мы внутри него), громкость плавно следует за биомом игрока ---
+      const forestBus = ctx.createGain();
+      forestBus.gain.value = 0;
+      forestBus.connect(listener.getInput());
+      // шум листвы: зацикленный шум через полосовой фильтр, дыхание громкости медленным LFO
+      const leafBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+      const ld = leafBuf.getChannelData(0);
+      for (let i = 0; i < ld.length; i++) ld[i] = Math.random() * 2 - 1;
+      const leaves = ctx.createBufferSource();
+      leaves.buffer = leafBuf; leaves.loop = true;
+      const leafF = ctx.createBiquadFilter();
+      leafF.type = 'bandpass'; leafF.frequency.value = 1900; leafF.Q.value = 0.6;
+      const leafG = ctx.createGain(); leafG.gain.value = 0.05;
+      const leafLfo = ctx.createOscillator(), leafLfoG = ctx.createGain();
+      leafLfo.frequency.value = 0.17; leafLfoG.gain.value = 0.03;
+      leafLfo.connect(leafLfoG).connect(leafG.gain);
+      leaves.connect(leafF).connect(leafG).connect(forestBus);
+      leaves.start(); leafLfo.start();
+
+      // --- город: PositionalAudio в центре города, линейное затухание к TOWN_H + 30 ---
+      const townBus = ctx.createGain();
+      const town = new THREE.PositionalAudio(listener);
+      town.setNodeSource(townBus);
+      town.setDistanceModel('linear');
+      town.setRefDistance(TOWN_H * 0.7);
+      town.setRolloffFactor(1);
+      town.setMaxDistance(TOWN_H + 30);
+      const townAnchor = new THREE.Object3D();
+      townAnchor.position.copy(townDir).multiplyScalar(P.R - 1);
+      townAnchor.add(town);
+      scene.add(townAnchor);
+      // бурдон — тихая низкая "струна", тянется всё время, пока слышен город
+      const drone = ctx.createOscillator(), droneF = ctx.createBiquadFilter(), droneG = ctx.createGain();
+      drone.type = 'sawtooth'; drone.frequency.value = 146.83;   // D3
+      droneF.type = 'lowpass'; droneF.frequency.value = 420;
+      droneG.gain.value = 0.035;
+      drone.connect(droneF).connect(droneG).connect(townBus);
+      drone.start();
+
+      audio = {
+        ctx, listener, bus, positional, noise, forestBus, townBus, town, townAnchor,
+        birds: [0, 1, 2, 3].map(i => ({ kind: i % 3, next: 0, pan: 0 })),
+        nextAnimal: 0, nextBeat: -Infinity, beat: 0, melodyDeg: 0, nextKitchen: 0,
+      };
       caravan.nextGrunt = clock.elapsedTime + 4 + Math.random() * 8;
+    }
+
+    // ---------- звуки леса ----------
+    // Птицы: три "вида" — синица (быстрые высокие трели), пеночка (ниспадающие свисты с вибрато),
+    // иволга (низкие мягкие флейтовые фразы). Каждая фраза — несколько чирков со своим стерео-положением.
+    function sfxBirdPhrase(bird) {
+      const { ctx, forestBus } = audio, t0 = ctx.currentTime;
+      const pan = ctx.createStereoPanner(); pan.pan.value = bird.pan;
+      const g = ctx.createGain(); g.gain.value = 1;
+      pan.connect(forestBus); g.connect(pan);
+      const n = 2 + Math.floor(Math.random() * 5);
+      let t = t0;
+      for (let i = 0; i < n; i++) {
+        const o = ctx.createOscillator(), e = ctx.createGain();
+        o.type = 'sine';
+        let f0, f1, f2, dur, vol;
+        if (bird.kind === 0) { f0 = 3600 + Math.random() * 800; f1 = f0 * 1.25; f2 = f0 * 0.95; dur = 0.06 + Math.random() * 0.05; vol = 0.05; }
+        else if (bird.kind === 1) { f0 = 2600 + Math.random() * 500; f1 = f0 * 0.8; f2 = f0 * 0.62; dur = 0.16 + Math.random() * 0.1; vol = 0.045; }
+        else { f0 = 1100 + Math.random() * 250; f1 = f0 * 1.15; f2 = f0 * 1.05; dur = 0.22 + Math.random() * 0.12; vol = 0.05; }
+        o.frequency.setValueAtTime(f0, t);
+        o.frequency.linearRampToValueAtTime(f1, t + dur * 0.4);
+        o.frequency.linearRampToValueAtTime(f2, t + dur);
+        if (bird.kind === 1) {   // вибрато
+          const v = ctx.createOscillator(), vg = ctx.createGain();
+          v.frequency.value = 28; vg.gain.value = 60; v.connect(vg).connect(o.frequency); v.start(t); v.stop(t + dur + 0.05);
+        }
+        e.gain.setValueAtTime(0, t);
+        e.gain.linearRampToValueAtTime(vol, t + 0.01);
+        e.gain.setValueAtTime(vol, t + dur * 0.7);
+        e.gain.exponentialRampToValueAtTime(0.0003, t + dur + 0.03);
+        o.connect(e).connect(g);
+        o.start(t); o.stop(t + dur + 0.05);
+        t += dur + 0.05 + Math.random() * 0.12;
+      }
+    }
+    // звери: кукушка, сова, дятел
+    function sfxAnimal() {
+      const { ctx, forestBus } = audio, t = ctx.currentTime;
+      const pan = ctx.createStereoPanner(); pan.pan.value = Math.random() * 1.6 - 0.8; pan.connect(forestBus);
+      const kind = Math.floor(Math.random() * 3);
+      if (kind === 0) {   // кукушка: две ноты, терция вниз, дважды
+        for (let r = 0; r < 2; r++) {
+          [[660, 0], [523, 0.32]].forEach(([f, dt]) => {
+            const o = ctx.createOscillator(), e = ctx.createGain(), s = t + r * 0.95 + dt;
+            o.type = 'sine'; o.frequency.value = f;
+            e.gain.setValueAtTime(0, s); e.gain.linearRampToValueAtTime(0.07, s + 0.03);
+            e.gain.setValueAtTime(0.07, s + 0.18); e.gain.exponentialRampToValueAtTime(0.0003, s + 0.28);
+            o.connect(e).connect(pan); o.start(s); o.stop(s + 0.3);
+          });
+        }
+      } else if (kind === 1) {   // сова: "у-ху", низкий мягкий тон через lowpass
+        [[0, 0.35], [0.5, 0.55]].forEach(([dt, dur]) => {
+          const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), e = ctx.createGain(), s = t + dt;
+          o.type = 'triangle'; o.frequency.setValueAtTime(380, s); o.frequency.linearRampToValueAtTime(330, s + dur);
+          f.type = 'lowpass'; f.frequency.value = 700;
+          e.gain.setValueAtTime(0, s); e.gain.linearRampToValueAtTime(0.09, s + 0.08);
+          e.gain.setValueAtTime(0.09, s + dur * 0.6); e.gain.exponentialRampToValueAtTime(0.0003, s + dur);
+          o.connect(f).connect(e).connect(pan); o.start(s); o.stop(s + dur + 0.02);
+        });
+      } else {   // дятел: серия быстрых сухих ударов
+        const n = 7 + Math.floor(Math.random() * 6), gap = 0.055 + Math.random() * 0.02;
+        for (let i = 0; i < n; i++) {
+          const src = ctx.createBufferSource(); src.buffer = audio.noise;
+          const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1300; f.Q.value = 2.5;
+          const e = ctx.createGain(), s = t + i * gap;
+          e.gain.setValueAtTime(0, s); e.gain.linearRampToValueAtTime(0.12, s + 0.002); e.gain.exponentialRampToValueAtTime(0.0003, s + 0.03);
+          src.connect(f).connect(e).connect(pan); src.start(s); src.stop(s + 0.04);
+        }
+      }
+    }
+
+    // ---------- звуки города ----------
+    // Музыка: лад хиджаз от D (D Eb F# G A Bb C), мелодия — случайное блуждание по ступеням с тяготением
+    // к тонике и форшлагами, "уд" — щипок (две пилы с расстройкой через lowpass с быстрым спадом).
+    // Ритм дарбуки — максум: D _ T _ _ D T _ на восьмых, ~100 bpm. Плюс кухня: шипение, звон посуды, нож.
+    const HIJAZ = [293.66, 311.13, 369.99, 392.0, 440.0, 466.16, 523.25, 587.33, 622.25, 739.99];
+    const MAQSUM = ['D', null, 'T', null, null, 'D', 'T', null];
+    const EIGHTH = 0.3;
+    function sfxOud(freq, t, vol = 0.11, dur = 0.7) {
+      const { ctx, townBus } = audio;
+      t = Math.max(t, ctx.currentTime);   // форшлаг может уйти в прошлое — AudioParam этого не прощает
+      const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), f = ctx.createBiquadFilter(), e = ctx.createGain();
+      o1.type = 'sawtooth'; o2.type = 'sawtooth';
+      o1.frequency.value = freq; o2.frequency.value = freq * 1.004;
+      f.type = 'lowpass'; f.Q.value = 1.2;
+      f.frequency.setValueAtTime(3200, t); f.frequency.exponentialRampToValueAtTime(500, t + 0.25);
+      e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(vol, t + 0.006);
+      e.gain.exponentialRampToValueAtTime(0.0003, t + dur);
+      o1.connect(f); o2.connect(f); f.connect(e).connect(townBus);
+      o1.start(t); o2.start(t); o1.stop(t + dur + 0.02); o2.stop(t + dur + 0.02);
+    }
+    function sfxDarbuka(kind, t) {
+      const { ctx, townBus, noise } = audio;
+      t = Math.max(t, ctx.currentTime);
+      if (kind === 'D') {   // "дум": низкий тон с быстрым падением высоты
+        const o = ctx.createOscillator(), e = ctx.createGain();
+        o.type = 'sine'; o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(65, t + 0.16);
+        e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.22, t + 0.004); e.gain.exponentialRampToValueAtTime(0.0003, t + 0.2);
+        o.connect(e).connect(townBus); o.start(t); o.stop(t + 0.22);
+      } else {              // "тек": звонкий шлепок по краю — короткий шум + высокий щелчок
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2600;
+        const e = ctx.createGain();
+        e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.09, t + 0.002); e.gain.exponentialRampToValueAtTime(0.0003, t + 0.07);
+        src.connect(f).connect(e).connect(townBus); src.start(t); src.stop(t + 0.08);
+        const o = ctx.createOscillator(), e2 = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = 950;
+        e2.gain.setValueAtTime(0.06, t); e2.gain.exponentialRampToValueAtTime(0.0003, t + 0.05);
+        o.connect(e2).connect(townBus); o.start(t); o.stop(t + 0.06);
+      }
+    }
+    // планировщик с упреждением: раскладывает ноты/удары на ближайшие 0.25 с
+    function scheduleTownMusic() {
+      const a = audio, ctx = a.ctx;
+      if (a.nextBeat < ctx.currentTime - 1) a.nextBeat = ctx.currentTime + 0.05;   // долго не было слышно — не догоняем
+      while (a.nextBeat < ctx.currentTime + 0.25) {
+        const t = a.nextBeat, step = a.beat % 8;
+        const hit = MAQSUM[step];
+        if (hit) sfxDarbuka(hit, t);
+        else if (Math.random() < 0.25) sfxDarbuka('T', t + EIGHTH / 2);   // синкопа
+        // мелодия: шаг ±1..2 ступени, на сильных долях тянет к тонике/квинте, иногда пауза или форшлаг
+        if (Math.random() < 0.8) {
+          let d = a.melodyDeg + (Math.random() < 0.5 ? -1 : 1) * (Math.random() < 0.7 ? 1 : 2);
+          if (step === 0 && Math.random() < 0.5) d = Math.random() < 0.6 ? 0 : 4;
+          if (a.melodyDeg === 0 && Math.random() < 0.6) d = Math.abs(d);          // не уходим ниже тоники слишком часто
+          d = Math.max(0, Math.min(HIJAZ.length - 1, d));
+          a.melodyDeg = d;
+          if (Math.random() < 0.3) sfxOud(HIJAZ[Math.max(0, d - 1)], t - 0.06, 0.06, 0.15);   // форшлаг
+          sfxOud(HIJAZ[d], t, step % 2 === 0 ? 0.12 : 0.085, Math.random() < 0.2 ? 1.1 : 0.6);
+          if (Math.random() < 0.15) sfxOud(HIJAZ[d], t + EIGHTH / 2, 0.07, 0.3);           // шестнадцатая
+        }
+        a.nextBeat += EIGHTH;
+        a.beat++;
+      }
+    }
+    function sfxKitchen() {
+      const { ctx, townBus, noise } = audio, t = ctx.currentTime;
+      const kind = Math.random();
+      if (kind < 0.4) {   // шипение сковороды
+        const src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 4200 + Math.random() * 1500; f.Q.value = 0.9;
+        const e = ctx.createGain(), dur = 0.5 + Math.random() * 1.2;
+        e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(0.045, t + 0.08);
+        for (let i = 1; i < 6; i++) e.gain.linearRampToValueAtTime(0.02 + Math.random() * 0.03, t + dur * i / 6);
+        e.gain.linearRampToValueAtTime(0, t + dur);
+        src.connect(f).connect(e).connect(townBus); src.start(t); src.stop(t + dur + 0.02);
+      } else if (kind < 0.75) {   // звон тарелок/стаканов: пара негармоничных партиалов
+        const n = 1 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < n; i++) {
+          const s = t + i * (0.08 + Math.random() * 0.12), base = 1800 + Math.random() * 2200;
+          [1, 2.31, 3.72].forEach((m, k) => {
+            const o = ctx.createOscillator(), e = ctx.createGain();
+            o.type = 'sine'; o.frequency.value = base * m;
+            const v = 0.05 / (k + 1);
+            e.gain.setValueAtTime(0, s); e.gain.linearRampToValueAtTime(v, s + 0.002); e.gain.exponentialRampToValueAtTime(0.0003, s + 0.25 + Math.random() * 0.2);
+            o.connect(e).connect(townBus); o.start(s); o.stop(s + 0.5);
+          });
+        }
+      } else {   // нож по доске: серия сухих ударов
+        const n = 4 + Math.floor(Math.random() * 5), gap = 0.11 + Math.random() * 0.05;
+        for (let i = 0; i < n; i++) {
+          const src = ctx.createBufferSource(); src.buffer = noise;
+          const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900;
+          const e = ctx.createGain(), s = t + i * gap * (1 + (Math.random() - 0.5) * 0.15);
+          e.gain.setValueAtTime(0, s); e.gain.linearRampToValueAtTime(0.14, s + 0.002); e.gain.exponentialRampToValueAtTime(0.0003, s + 0.04);
+          src.connect(f).connect(e).connect(townBus); src.start(s); src.stop(s + 0.05);
+        }
+      }
+    }
+
+    // громкость леса следует за биомом игрока; город слышен по расстоянию (PositionalAudio), синтезируем только рядом
+    let playerBiome = BIOME.GRASS;
+    function updateAmbience() {
+      if (!audio) return;
+      const a = audio, ctx = a.ctx, now = ctx.currentTime, on = P.AMBIENCE > 0.5 && P.VOLUME > 0;
+      const inForest = on && playerBiome === BIOME.FOREST;
+      a.forestBus.gain.setTargetAtTime(inForest ? 1 : 0, now, 0.7);
+      if (inForest) {
+        for (const b of a.birds) {
+          if (now > b.next) { b.pan = Math.random() * 1.8 - 0.9; sfxBirdPhrase(b); b.next = now + 2.5 + Math.random() * 7; }
+        }
+        if (a.nextAnimal === 0) a.nextAnimal = now + 4 + Math.random() * 8;
+        if (now > a.nextAnimal) { sfxAnimal(); a.nextAnimal = now + 10 + Math.random() * 20; }
+      } else a.nextAnimal = 0;
+      const townDist = townDir.angleTo(fowUniforms.uPlayerDir.value) * P.R;
+      a.townAnchor.position.copy(townDir).multiplyScalar(P.R - 1);   // следует за радиусом
+      const nearTown = on && townDist < TOWN_H + 36;
+      a.townBus.gain.setTargetAtTime(nearTown ? 1 : 0, now, 0.4);
+      if (nearTown) {
+        scheduleTownMusic();
+        if (now > a.nextKitchen) { sfxKitchen(); a.nextKitchen = now + 0.8 + Math.random() * 3; }
+      }
     }
 
     function sfxBell(freq, gain) {
@@ -718,6 +1407,18 @@
         cv.dir.multiplyScalar(Math.cos(ang)).addScaledVector(cv.tan, Math.sin(ang)).normalize();
         cv.tan.multiplyScalar(Math.cos(ang)).addScaledVector(_cd, -Math.sin(ang));
         cv.tan.addScaledVector(cv.dir, -cv.tan.dot(cv.dir)).normalize();
+        // город и озеро — запретные зоны: у границы отражаем направление движения (отскок)
+        const bounce = (center, radiusM) => {
+          if (cv.dir.angleTo(center) * R >= radiusM) return;
+          _hd.copy(center).addScaledVector(cv.dir, -cv.dir.dot(center)).normalize();   // к центру зоны, в касательной плоскости
+          const toward = cv.tan.dot(_hd);
+          if (toward > 0) {
+            cv.tan.addScaledVector(_hd, -2 * toward);
+            cv.tan.applyAxisAngle(cv.dir, (Math.random() - 0.5) * 0.4).normalize();  // чуть сбить угол, чтобы не зациклиться
+          }
+        };
+        bounce(townDir, TOWN_AVOID);
+        bounce(lakeDir, (LAKE_R + 0.06) * R);
         cv.s += ang;
         cv.travelled += ang;
         const last = cv.trail[cv.trail.length - 1];
@@ -869,9 +1570,33 @@
     // отладка: ?debug в URL открывает состояние в консоли (window.dbg), напр. dbg.goToCaravan()
     if (location.search.includes('debug')) {
       window.dbg = {
-        P, pos, forward, caravan, camera, initAudio,
+        P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
+        biomeAt, BIOME, bioAxis, lakeDir, trees,
         get audio() { return audio; },
+        get playerBiome() { return playerBiome; },
         setPitch: v => { pitch = v; },
+        // встать в направлении d (единичный вектор) лицом к точке target
+        goTo(d, target) {
+          pos.copy(d).multiplyScalar(P.R - P.EYE);
+          forward.copy(target).sub(d);
+        },
+        // на опушку леса: в 12 м от границы на стороне травы, лицом к центру леса
+        goToForest() {
+          const d = bioE1.clone().multiplyScalar(Math.cos(BAND - 12 / P.R)).addScaledVector(bioAxis, Math.sin(BAND - 12 / P.R)).normalize();
+          this.goTo(d, bioAxis);
+        },
+        // на берег озера, лицом к его центру
+        goToLake(dist = LAKE_R * P.R + 6) {
+          const toStart = bioE1.clone().multiplyScalar(Math.cos(-1.4 + Math.PI / 2)).addScaledVector(bioE2, Math.sin(-1.4 + Math.PI / 2));
+          const d = lakeDir.clone().multiplyScalar(Math.cos(dist / P.R)).addScaledVector(toStart, Math.sin(dist / P.R)).normalize();
+          this.goTo(d, lakeDir);
+        },
+        // встать у южных ворот города лицом к нему
+        goToTown(dist = TOWN_H + 8) {
+          const d = townToDir(0, -dist, new THREE.Vector3());
+          pos.copy(d).multiplyScalar(P.R - P.EYE);
+          forward.copy(townDir).sub(d);
+        },
         // встать в 12 м позади каравана лицом к нему
         goToCaravan() {
           const back = caravan.trail[0].dir;
@@ -895,7 +1620,11 @@
       if (keys.has('KeyS') || keys.has('ArrowDown')) _move.sub(forward);
       if (keys.has('KeyD') || keys.has('ArrowRight')) _move.add(_right);
       if (keys.has('KeyA') || keys.has('ArrowLeft')) _move.sub(_right);
-      if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), P.SPEED * dt);
+      // в воде бредём вдвое медленнее
+      if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), P.SPEED * dt * (playerBiome === BIOME.WATER ? 0.45 : 1));
+      collideWithTown();
+      collideWithTrees();
+      playerBiome = biomeAt(_pd.copy(pos).normalize());
 
       // прыжок: "притяжение" тянет обратно к стенке
       if (jumpH > 0 || jumpV > 0) {
@@ -915,6 +1644,16 @@
 
       updateMessages(dt);
       updateCaravan(dt);
+      updateAmbience();
+
+      // небо: радиус R - SKY_H (но не ближе 3 м к глазам), облачность и дрейф
+      const skyR = P.R - Math.min(P.SKY_H, P.R - P.EYE - 3);
+      sky.visible = P.SKY_H > 0;
+      sky.scale.setScalar(skyR);
+      skyU.uCoverage.value = P.SKY_CLOUDS;   // uTime — общий с туманом войны (fowUniforms)
+      // дымка: линейный туман цвета неба — прячет дальнюю сторону шара и рисует горизонт
+      scene.fog.near = P.HAZE * 0.3;
+      scene.fog.far = P.HAZE;
 
       // туман войны: униформы + отметка разведанного, когда отошли достаточно далеко от прошлой отметки
       const fowOn = P.FOW > 0.5;
@@ -936,7 +1675,9 @@
         `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
         `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}` +
         (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '') +
-        `  |  караван: ${(caravan.dir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м`;
+        `  |  караван: ${(caravan.dir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
+        `  |  город: ${(townDir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
+        `  |  под ногами: ${BIOME_NAME[playerBiome]}`;
 
       renderer.render(scene, camera);
       requestAnimationFrame(tick);
