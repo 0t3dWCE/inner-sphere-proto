@@ -151,7 +151,8 @@ function onNetData(slot, m) {
     r.target.fromArray(m.p);
     r.tfwd.fromArray(m.f);
     r.jump = m.j || 0;
-    if (!r.pos) { r.pos = r.target.clone(); r.fwd.copy(r.tfwd); r.group.visible = true; }
+    if (!r.pos) { r.pos = r.target.clone(); r.fwd.copy(r.tfwd); }
+    r.group.visible = !m.in;                            // игрок внутри дома — аватар в мире скрыт
     return;
   }
   for (const fn of handlers.get(m.t) || []) fn(m, slot);
@@ -166,7 +167,7 @@ export function updateNet(dt) {
   netAcc += dt;
   if (netAcc >= 1 / POS_HZ && net.conns.size) {
     netAcc = 0;
-    netBroadcast({ t: 'pos', p: player.pos.toArray(), f: player.forward.toArray(), j: player.jumpH });
+    netBroadcast({ t: 'pos', p: player.pos.toArray(), f: player.forward.toArray(), j: player.jumpH, in: player.inside ? 1 : 0 });
   }
   const k = 1 - Math.exp(-dt * 12);
   for (const r of net.remotes.values()) {

@@ -11,6 +11,7 @@ import { caravan } from './caravan.js';
 import { initAudio } from './audio.js';
 import { net, onNetChange, sendHello } from './net.js';
 import { isOwner, ownerName, publishRoomParams, onRoomChange } from './roomsync.js';
+import { house } from './house.js';
 
 // ---------- панель параметров ----------
 const form = document.getElementById('params');
@@ -126,7 +127,17 @@ document.addEventListener('pointerlockchange', () => {
 const hud = document.getElementById('hud');
 export function updateHud(fowOn) {
   const { pos, jumpH, groundH, biome } = player;
+  if (player.inside) {
+    const a = house.active;
+    hud.textContent =
+      `дом №${player.inside.house + 1}  ·  этаж ${player.inside.floor + 1} из ${a ? a.it.floors : '?'}` +
+      `  |  внутри: ${a ? `${a.it.W.toFixed(1)}×${a.it.D.toFixed(1)} м` : ''}` +
+      `  |  табличек: ${plaques.length}` +
+      (house.hint ? `  |  ${house.hint}` : '');
+    return;
+  }
   hud.textContent =
+    (house.hint ? `${house.hint}  |  ` : '') +
     `R=${P.R}  |  позиция: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}` +
     `  |  высота над стенкой: ${jumpH.toFixed(2)}  |  табличек: ${plaques.length}` +
     (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '') +

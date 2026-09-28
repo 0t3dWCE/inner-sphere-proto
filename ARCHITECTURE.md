@@ -18,8 +18,9 @@
 | `sky.js` | Сфера-атмосфера с облаками и солнцем, `updateSky()`. | `sky, updateSky` |
 | `props.js` | Реестр объектов на стенке (`addProp/placeOnWall`), палитра, `buildProps()` — цветные коробки и маяки. | `props, addProp, placeOnWall, palette, buildProps` |
 | `forest.js` | Ёлки инстансами: `buildForest()`, `placeTrees()`, массив `trees` для коллизий. | `trees, buildForest, placeTrees` |
-| `town.js` | Дома, стена, ворота, башни: `buildTown()`, AABB-препятствия. | `townObstacles, buildTown` |
-| `player.js` | Ввод (клавиатура, мышь), ходьба, прыжок, коллизии с городом и ёлками, удержание на рельефе, камера. Пишет `state.player`. | `updatePlayer, setPitch` |
+| `town.js` | Дома, стена, ворота, башни: `buildTown()`, AABB-препятствия; метаданные домов `houses[]` (размеры, поворот, дверь, балконы) и площадки балконов `townPlatforms[]`, на которых можно стоять. | `townObstacles, houses, townPlatforms, buildTown, houseLocalToTown, houseDoorNear, townPlatformAt` |
+| `house.js` | Интерьеры: отдельная сцена `houseScene` с плоским полом, генератор дома из seed+номер (этажи, лестница, перегородки, мебель, обои, «особенность»), контроллер ходьбы внутри (перехватывает управление через `setPlayerOverride`), вход/выход через дверь и балконы (`onSpace`). | `houseScene, house {active, hint}, updateHouse, debugEnter, debugExit` |
+| `player.js` | Ввод (клавиатура, мышь), ходьба, прыжок, коллизии с городом и ёлками, удержание на рельефе и на балконных площадках, камера. Пишет `state.player`. Точки расширения: `onSpace(fn)` — перехват пробела, `setPlayerOverride({update, mouse, jump})` — отдать управление другому контроллеру. | `updatePlayer, setPitch, onSpace, setPlayerOverride, keys, townXZ, nearTown, platform` |
 | `messages.js` | Шары-сообщения и таблички (G-Set), форма чата, бросок по клику, сеть: `ball`, `plaque`, поле `plaques` в `hello`. | `plaques, loadPlaques, updateMessages` |
 | `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt` |
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
@@ -37,9 +38,10 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & caravan & messages & net & roomsync & player & town & forest & props & sky & terrain & ambience
-  ui --> roomsync & net & caravan & messages & audio & terrain & fow & world & params & state
-  debug --> ui & roomsync & net & caravan & audio & player & forest & town & terrain & world & params & state
+  main --> ui & debug & caravan & messages & net & roomsync & house & player & town & forest & props & sky & terrain & ambience
+  ui --> roomsync & net & caravan & messages & house & audio & terrain & fow & world & params & state
+  debug --> ui & roomsync & net & caravan & audio & house & player & forest & town & terrain & world & params & state
+  house --> player & town & world & scene & params & state
   roomsync --> net & terrain & params & state
   caravan --> net & audio & props & terrain & world & fow & scene & params & state
   messages --> net & props & terrain & fow & scene & params & state
@@ -60,7 +62,7 @@ flowchart TD
 ```
 
 Слои сверху вниз: **оркестрация** (`main`, `debug`) → **UI и сетевые надстройки** (`ui`, `roomsync`) →
-**игровая логика** (`player`, `messages`, `caravan`, `ambience`) → **транспорт и звук** (`net`, `audio`) →
+**игровая логика** (`player`, `house`, `messages`, `caravan`, `ambience`) → **транспорт и звук** (`net`, `audio`) →
 **мир** (`town`, `forest`, `props`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
 
 ## Состояние: кто владеет, кто пишет
@@ -69,7 +71,9 @@ flowchart TD
 |---|---|---|---|
 | `P` — параметры | `params` | `ui.setParam`, `roomsync` (применяет чужие), `params` (загрузка) | все, каждый кадр |
 | `roomState {ver, owner, values}` | `params` | `roomsync`, `ui` (создание комнаты — в localStorage) | `roomsync`, `ui`, `debug` |
-| `player {pos, forward, pitch, jumpH, jumpV, biome, groundH}` | `state` | `player` (кадр), `debug` (телепорт) | `net`, `fow`, `messages`, `caravan`, `ambience`, `ui` |
+| `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `debug` (телепорт) | `net` (флаг `in` в `pos`), `fow`, `messages` (внутри не бросаем), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
+| `house.active {h, it, pos, yaw, pitch, vy, grounded}`, `house.hint` | `house` | `house` (контроллер) | `ui` (HUD), `debug` |
+| `houses[]`, `townPlatforms[]` | `town` | `town` при сборке | `house` (интерьер, точки выхода), `player` (стоять на балконе), `debug` |
 | `fowUniforms` (в т.ч. `uPlayerDir`, `uTime`) | `fow` | `fow.updateFow` | все материалы, `ambience`, `ui` (HUD) |
 | `props[]`, `townObjects[]`, `trees[]` | `props`, `town`, `forest` | свои модули при сборке | `terrain.applyRadius` через `radiusListeners`, `player` (коллизии) |
 | `plaques[]`, `plaqueIds` | `messages` | `messages` (свои, из сети, из localStorage) | `ui` (HUD) |
@@ -109,7 +113,10 @@ flowchart TD
 dt = min(clock.getDelta(), 0.05)
 updatePlayer(dt)         player     базис (up = −normalize(pos), forward в касательной плоскости), WASD, коллизии
                                     с городом и ёлками, биом под ногами, прыжок, pos.setLength(R − h − EYE − jumpH),
-                                    камера = basis(right, up, −forward) + pitch
+                                    прилипание к балконной площадке (townPlatformAt), камера = basis(right, up, −forward) + pitch.
+                                    Если стоит override (игрок в доме) — вместо всего этого house.controller.update(dt):
+                                    плоская гравитация, круг-vs-AABB, пол/лестница через groundAt, камера YXZ(pitch, yaw)
+updateHouse()            house      подсказка «пробел — войти/выйти» (у двери, на балконе снаружи; у выходов внутри)
 updateMessages(dt)       messages   шары: гравитация от центра, приземление → landBall → табличка (+ сеть);
                                     таблички поворачиваются к игроку
 updateCaravan()          caravan    догнать worldTime() шагами по 50 мс (stepCaravan — детерминированно),
@@ -119,9 +126,31 @@ updateNet(dt)            net        своя pos ~12 Гц; чужие авата
 updateSky()              sky        радиус R − SKY_H, облачность
 updateFow(elapsed)       fow        дымка (fog.near/far), униформы тумана войны, uPlayerDir, отметка разведанного,
                                     процент разведки раз в 60 кадров → возвращает fowOn
-updateHud(fowOn)         ui         строка HUD
-renderer.render(scene, camera)
+updateHud(fowOn)         ui         строка HUD (внутри дома — номер дома, этаж, размер, подсказка)
+renderer.render(player.inside ? houseScene : scene, camera)
 ```
+
+## Дома: вход, интерьер, выход
+
+- **Снаружи.** `town.buildTown()` кладёт в `houses[]` для каждого дома `{x, z, yaw, w, d, floors, doorX, balconies}` и
+  в `townPlatforms[]` AABB каждого балкона с высотой `f·3 + 0.16`. `player.updatePlayer` рядом с городом переводит
+  позицию в координаты города (`townXZ`) и, если под ногами площадка и игрок опускается на неё, «прилипает»
+  (`jumpH = plat.h`, `platform = plat`), так что на балконе можно стоять и прыгать.
+- **Пробел.** `player` сначала отдаёт пробел обработчикам `onSpace`; `house` возвращает `true`, если что-то
+  сделал (вошёл/вышел), иначе обычный прыжок. У двери (`houseDoorNear`) — вход на 1 этаж; стоя на площадке
+  балкона — вход на этаж балкона; внутри у двери/балконной двери — выход.
+- **Внутри.** Интерьер строится один раз на дом (`built`) собственным RNG `mulberry32(WORLD_SEED ^ hash32('house:'+idx))`,
+  поэтому `rand()` мира не тратится и у всех в комнате интерьеры одинаковые. Размер внутри — снаружи × 1.7–2.6
+  по каждой оси (у каждого дома свой), этаж 3.2 м, лестница вдоль левой стены с площадкой 1.6 м перед первой
+  ступенью, перегородки с проёмами 1.4 м, мебель ставится rejection sampling с гарантией зазора ≥ 1 м между любыми
+  препятствиями (игрок — круг ⌀0.7), у стен — либо вплотную, либо ≥ 1 м. Запретные зоны (`roomZones`): подходы к
+  выходам, к лестнице снизу и сверху, проёмы перегородок, полоса вдоль лестницы (`corridorX`).
+- **Сцена.** Пока `player.inside`, `main` рендерит `houseScene` (в ней ровно один интерьер — `shown`), мир при этом
+  живёт: сеть, караван, таблички обновляются. В `pos` уходит флаг `in`, по нему у остальных аватар скрывается.
+  Камера — ребёнок мировой `scene`, поэтому контроллер сам зовёт `camera.updateMatrixWorld()`.
+- **Выход.** `exitToWorld(h, lx, lz, jumpH)`: локальные координаты дома → город (`houseLocalToTown`) → направление
+  на сфере (`townToDir`), `player.pos` на нужной высоте, `forward` от фасада; при выходе на балкон `jumpH = f·3 + 0.16`
+  и `updatePlayer` на следующем кадре находит площадку.
 
 Порядок важен в двух местах: `updateAmbience` и `updateHud` читают `fowUniforms.uPlayerDir` — у ambience это
 значение предыдущего кадра (как и было в монолите), у HUD — уже текущее.

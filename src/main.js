@@ -3,7 +3,7 @@
 // Импорты — одновременно и порядок инициализации модулей (у некоторых есть побочные эффекты на верхнем уровне:
 // рендерер, меши сферы/воды/неба, подписки на сеть). Всё, что тратит rand() мира, вынесено в явные шаги ниже —
 // их порядок менять нельзя, иначе у комнаты с тем же seed получится другой мир.
-import { clock } from './state.js';
+import { clock, player } from './state.js';
 import './params.js';
 import { renderer, scene, camera } from './scene.js';
 import { updateFow } from './fow.js';
@@ -14,6 +14,7 @@ import { buildProps } from './props.js';
 import { buildForest } from './forest.js';
 import { buildTown } from './town.js';
 import { updatePlayer } from './player.js';
+import { houseScene, updateHouse } from './house.js';
 import { loadPlaques, updateMessages } from './messages.js';
 import { buildCaravan, updateCaravan } from './caravan.js';
 import { updateAmbience } from './ambience.js';
@@ -37,7 +38,8 @@ installDebug();     // window.dbg при ?debug
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  updatePlayer(dt);       // ввод, ходьба, коллизии, биом под ногами, прыжок, рельеф, камера
+  updatePlayer(dt);       // ввод, ходьба, коллизии, биом под ногами, прыжок, рельеф, камера (внутри дома — контроллер house.js)
+  updateHouse();          // подсказка «пробел — войти/выйти» у дверей и балконов
   updateMessages(dt);     // полёт шаров, приземление в таблички, поворот табличек к игроку
   updateCaravan();        // догнать мировое время, расставить верблюдов/погонщиков, анимация, звук
   updateAmbience();       // лес/город: громкость шин, планирование птиц, музыки, кухни
@@ -46,7 +48,7 @@ function tick() {
   const fowOn = updateFow(clock.elapsedTime);   // дымка, униформы тумана войны, карта разведки
   updateHud(fowOn);
 
-  renderer.render(scene, camera);
+  renderer.render(player.inside ? houseScene : scene, camera);   // внутри дома — отдельная сцена интерьера
   requestAnimationFrame(tick);
 }
 tick();

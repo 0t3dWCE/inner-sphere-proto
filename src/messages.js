@@ -55,7 +55,7 @@ function spawnBall(position, vel, text, color, remote) {
   balls.push({ mesh, vel: vel.clone(), text, remote });
 }
 function throwBall() {
-  if (!heldText) return;
+  if (!heldText || player.inside) return;   // внутри дома шар бросить некуда — мир снаружи
   const p = heldBall.getWorldPosition(new THREE.Vector3());
   const vel = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(P.THROW_SPEED);
   spawnBall(p, vel, heldText, PLAYER_COLOR, false);
