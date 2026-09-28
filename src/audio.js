@@ -1,7 +1,8 @@
 // Звук: ядро Web Audio (всё синтезируется, файлов нет) и звуки каравана.
 // Контекст стартует по первому клику (политика браузеров) — initAudio() вызывает оверлей.
-// Три шины: bus — караван (PositionalAudio на среднем верблюде, линейное затухание до SOUND_R),
-// forestBus — лес (без позиции, мы внутри него), townBus — город (PositionalAudio в его центре).
+// Шины: bus — караван (PositionalAudio на среднем верблюде, линейное затухание до SOUND_R),
+// forestBus — лес (без позиции, мы внутри него), townBus — город (PositionalAudio в его центре),
+// selfBus — звуки самого игрока (лук в руках): без позиции, слышны всегда.
 import * as THREE from 'three';
 import { P } from './params.js';
 import { scene, camera } from './scene.js';
@@ -69,8 +70,13 @@ export function initAudio() {
   drone.connect(droneF).connect(droneG).connect(townBus);
   drone.start();
 
+  // --- игрок: непозиционная шина для звуков «из рук» (тетива лука) ---
+  // (общая громкость — через listener.setMasterVolume(P.VOLUME) в caravan.js)
+  const selfBus = ctx.createGain();
+  selfBus.connect(listener.getInput());
+
   audio = {
-    ctx, listener, bus, positional, noise, forestBus, townBus, town, townAnchor,
+    ctx, listener, bus, positional, noise, forestBus, townBus, town, townAnchor, selfBus,
     birds: [0, 1, 2, 3].map(i => ({ kind: i % 3, next: 0, pan: 0 })),
     nextAnimal: 0, nextBeat: -Infinity, beat: 0, melodyDeg: 0, nextKitchen: 0,
   };
@@ -106,9 +112,10 @@ export function sfxThud(gain) {
   src.connect(f).connect(g).connect(bus);
   src.start(t); src.stop(t + 0.16);
 }
-// щелчок тетивы: короткий шумовой удар + быстро затухающая струна (bow.js)
+// щелчок тетивы: короткий шумовой удар + быстро затухающая струна (bow.js).
+// Идёт в selfBus, а не в bus каравана — иначе слышно только рядом с верблюдами.
 export function sfxTwang() {
-  const { ctx, bus, noise } = audio, t = ctx.currentTime;
+  const { ctx, selfBus: bus, noise } = audio, t = ctx.currentTime;
   const src = ctx.createBufferSource();
   src.buffer = noise;
   const f = ctx.createBiquadFilter();
