@@ -35,6 +35,7 @@
       border: 1px solid rgba(255,255,255,.25); border-radius: 4px; padding: 3px 6px; font-size: 13px;
     }
     #settings input:focus { outline: 1px solid #63b3ed; }
+    #settings input:disabled { opacity: .45; cursor: not-allowed; }
     #settings .hint { margin-top: 6px; font-size: 11px; opacity: .65; }
     #chat {
       position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 3; width: min(520px, 90vw);
@@ -75,6 +76,7 @@
       <span><button id="clearFow" type="button" title="Забыть разведанное">Туман ↺</button> <button id="reset" type="button">Сброс</button></span>
     </div>
     <form id="params" autocomplete="off"></form>
+    <div class="hint" id="lockHint" style="display:none"></div>
     <div class="hint">Esc — отпустить мышь, чтобы редактировать. Значения сохраняются в браузере.</div>
   </div>
   <div id="crosshair"></div>
@@ -152,6 +154,28 @@
     const randCaravan = mulberry32(WORLD_SEED ^ 0x9e3779b9);    // повороты каравана (детерминированная симуляция)
     const NET_LOCKED = new Set(['R', 'CAMEL_SPEED']);           // в комнате мир общий — эти параметры фиксированы
     if (ROOM) for (const k of NET_LOCKED) P[k] = DEFAULTS[k];
+    // Параметры мира в комнате задаёт её создатель (owner) — они рассылаются всем. Личные (мышь, громкость) — у каждого свои.
+    // Хранится как LWW-регистр { ver, owner, values }: больший ver выигрывает, лежит в localStorage комнаты.
+    const NET_PERSONAL = new Set(['MOUSE_SENS', 'VOLUME', 'SOUND_R']);
+    const NET_SHARED = new Set(SCHEMA.map(s => s[0]).filter(k => !NET_PERSONAL.has(k) && !NET_LOCKED.has(k)));
+    const ROOM_KEY = 'inner-sphere-room-' + ROOM;
+    const roomState = { ver: 0, owner: null, values: {} };
+    const sharedValues = () => Object.fromEntries([...NET_SHARED].map(k => [k, P[k]]));
+    function applyRoomValues(values) {   // -> список изменившихся ключей
+      const changed = [];
+      for (const [k, , min, max] of SCHEMA) {
+        if (!NET_SHARED.has(k) || !Number.isFinite(values[k])) continue;
+        const v = THREE.MathUtils.clamp(values[k], min, max);
+        if (v !== P[k]) { P[k] = v; changed.push(k); }
+      }
+      return changed;
+    }
+    if (ROOM) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(ROOM_KEY) || 'null');
+        if (saved && saved.ver > 0) { Object.assign(roomState, saved); applyRoomValues(roomState.values); }
+      } catch { /* нет сохранённого состояния */ }
+    }
     const ME = (() => {
       try {
         const saved = JSON.parse(localStorage.getItem('inner-sphere-me') || 'null');
@@ -1541,6 +1565,39 @@
     // Таблички комнаты и worldT0 лежат в localStorage: после F5 мир на месте ещё до соединения.
     const NET_MAX = 5, POS_HZ = 12;
     const net = { peer: null, slot: -1, conns: new Map(), remotes: new Map(), pending: new Map(), status: '' };
+    // владелец комнаты — её создатель; у старых комнат без владельца параметры крутит младший занятый слот
+    function isOwner() {
+      if (!ROOM) return true;
+      if (roomState.owner) return roomState.owner === ME.id;
+      return net.slot >= 0 && net.slot === Math.min(net.slot, ...net.conns.keys());
+    }
+    function ownerName() {
+      if (!roomState.owner) return null;
+      if (roomState.owner === ME.id) return ME.name;
+      for (const r of net.remotes.values()) if (r.id === roomState.owner) return r.name;
+      return 'создатель комнаты (не в сети)';
+    }
+    let refreshPanelLock = () => {};   // переопределяется, когда панель построена
+    function saveRoomState() { try { localStorage.setItem(ROOM_KEY, JSON.stringify(roomState)); } catch { /* ок */ } }
+    // владелец поменял параметр: новая версия — всем
+    function publishRoomParams() {
+      roomState.ver++;
+      roomState.values = sharedValues();
+      if (!roomState.owner) roomState.owner = ME.id;   // старая комната: первый, кто крутит, становится владельцем
+      saveRoomState();
+      netBroadcast({ t: 'params', room: roomState });
+      refreshPanelLock();
+    }
+    // пришло состояние комнаты: применяем, если новее нашего
+    function receiveRoomState(rs) {
+      if (!rs || !(rs.ver > roomState.ver)) return;
+      Object.assign(roomState, { ver: rs.ver, owner: rs.owner || roomState.owner, values: rs.values || {} });
+      const changed = applyRoomValues(roomState.values);
+      if (changed.includes('TERRAIN_H') || changed.includes('EYE')) { P.EYE = Math.min(P.EYE, P.R / 2); applyRadius(); }
+      if (changed.length) syncInputs();
+      saveRoomState();
+      refreshPanelLock();
+    }
     const netEl = document.getElementById('net');
     const slotId = s => `inner-sphere-${ROOM}-${s}`;
     const slotOf = peerId => parseInt(peerId.split('-').pop(), 10);
@@ -1562,11 +1619,20 @@
       renderNetPanel();
     }
     function renderNetPanel() {
+      refreshPanelLock();
       netEl.replaceChildren();
       const add = (tag, props = {}, text) => { const el = Object.assign(document.createElement(tag), props); if (text != null) el.textContent = text; netEl.appendChild(el); return el; };
       if (!ROOM) {
         add('span', {}, 'Одиночный режим');
-        add('button', { type: 'button', onclick: () => { location.hash = 'room=' + newId().slice(0, 6); location.reload(); } }, 'Создать комнату');
+        add('button', {
+          type: 'button', onclick: () => {
+            const id = newId().slice(0, 6);
+            // создатель — владелец: его текущие параметры мира становятся параметрами комнаты
+            localStorage.setItem('inner-sphere-room-' + id, JSON.stringify({ ver: 1, owner: ME.id, values: sharedValues() }));
+            location.hash = 'room=' + id;
+            location.reload();
+          },
+        }, 'Создать комнату');
         return;
       }
       const me = add('span');
@@ -1578,7 +1644,7 @@
         netBroadcast(helloMsg());
       });
       me.append(nameIn);
-      add('span', {}, `комната ${ROOM} · игроков: ${1 + net.remotes.size}`);
+      add('span', {}, `комната ${ROOM} · игроков: ${1 + net.remotes.size}` + (isOwner() ? ' · вы владелец' : ''));
       for (const r of net.remotes.values()) {
         const s = add('span');
         s.append(Object.assign(document.createElement('span'), { className: 'dot', style: `background:#${r.color.getHexString()}` }), r.name);
@@ -1589,7 +1655,7 @@
       if (net.status) add('span', { className: 'status' }, net.status);
     }
 
-    const helloMsg = () => ({ t: 'hello', id: ME.id, name: ME.name, color: PLAYER_COLOR.getHex(), t0: worldT0, plaques: plaqueList() });
+    const helloMsg = () => ({ t: 'hello', id: ME.id, name: ME.name, color: PLAYER_COLOR.getHex(), t0: worldT0, plaques: plaqueList(), room: roomState });
 
     function netStart() {
       if (!ROOM || typeof Peer === 'undefined') { renderNetPanel(); return; }
@@ -1704,9 +1770,14 @@
           let added = 0;
           for (const rec of m.plaques || []) if (rec && rec.id && addPlaque(rec)) added++;
           if (added) savePlaques();
+          receiveRoomState(m.room);
           netStatus('');
           break;
         }
+        case 'params':
+          receiveRoomState(m.room);
+          netStatus('');
+          break;
         case 'pos': {
           const r = net.remotes.get(slot);
           if (!r) return;
@@ -1928,23 +1999,46 @@
       inputs[key] = input;
     }
     form.addEventListener('submit', e => e.preventDefault());
+    // в комнате общие параметры крутит только владелец — у остальных они только для чтения
+    const lockHint = document.getElementById('lockHint');
+    refreshPanelLock = () => {
+      if (!ROOM) return;
+      const owner = isOwner();
+      for (const k of NET_SHARED) {
+        inputs[k].disabled = !owner;
+        inputs[k].title = owner ? 'Общий параметр комнаты — применится у всех' : 'Меняет владелец комнаты';
+      }
+      const who = ownerName();
+      lockHint.style.display = owner ? 'none' : '';
+      lockHint.textContent = `Параметры мира задаёт ${who || 'владелец комнаты'}; у вас — только мышь и звук.`;
+    };
+    refreshPanelLock();
 
     function setParam(key, value) {
       if (ROOM && NET_LOCKED.has(key)) return;
+      if (ROOM && NET_SHARED.has(key) && !isOwner()) return;
       if (key === 'EYE') value = Math.min(value, P.R / 2);   // глаза не выше центра сферы
       P[key] = value;
       if (key === 'R') { P.EYE = Math.min(P.EYE, P.R / 2); inputs.EYE.value = P.EYE; applyRadius(); }
       if (key === 'TERRAIN_H') applyRadius();   // рельеф зашит в геометрию и позиции объектов
       localStorage.setItem(STORAGE_KEY, JSON.stringify(P));
+      if (ROOM && NET_SHARED.has(key)) publishRoomParams();
     }
     function syncInputs() { for (const k in inputs) inputs[k].value = P[k]; }
 
     document.getElementById('clearFow').addEventListener('click', () => { clearExplored(); exploredPct = 0; });
     document.getElementById('reset').addEventListener('click', () => {
+      if (ROOM && !isOwner()) {   // не владелец сбрасывает только своё личное
+        for (const k of NET_PERSONAL) P[k] = DEFAULTS[k];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(P));
+        syncInputs();
+        return;
+      }
       Object.assign(P, DEFAULTS);
       localStorage.removeItem(STORAGE_KEY);
       syncInputs();
       applyRadius();
+      if (ROOM) publishRoomParams();
     });
 
     const overlay = document.getElementById('overlay');
@@ -1975,7 +2069,7 @@
     if (location.search.includes('debug')) {
       window.dbg = {
         P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
-        biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED,
+        biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED, roomState, isOwner, setParam,
         get worldT0() { return worldT0; },
         get audio() { return audio; },
         get playerBiome() { return playerBiome; },
