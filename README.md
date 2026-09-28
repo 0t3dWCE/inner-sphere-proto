@@ -3,7 +3,7 @@
 Маленький мир-«наизнанку» на [three.js](https://threejs.org/): игрок ходит по **внутренней** поверхности сферы,
 гравитация тянет к стенке, а горизонт не прячется за краем, а загибается вверх — далёкие объекты видны «над головой».
 
-Демо: https://0t3dwce.github.io/inner-sphere-proto/
+Демо: https://0t3dwce.github.io/inner-sphere-proto/ · история изменений — [HISTORY.md](HISTORY.md) · планы — [IDEAS.md](IDEAS.md)
 
 ## Вдохновение
 
