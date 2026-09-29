@@ -25,6 +25,7 @@
 | `bow.js` | Лук в лесу (место из seed'а, свой RNG), подбор вплотную (запоминается в localStorage комнаты), лук в руке (ребёнок камеры), стрелы: клик без шара → полёт по дуге (`P.ARROW_SPEED`, `P.GRAVITY`), след, втыкание в землю (остаются, FIFO 300); сеть: `arrow {p, v, color}`. | `bow {have, hint, dir}, arrows, buildBow, updateBow` |
 | `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`), тетива (`sfxTwang`). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt, sfxTwang` |
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
+| `steps.js` | Шаги: каденс по пройденному пути (снаружи — `player.pos`, в доме — `house.active.pos`), покрытие (биом, мостовая города, дерево балкона/дома), синтез в `audio.selfBus`, `P.STEPS`. | `updateSteps` |
 | `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`; сеть: поле `t0` в `hello`. `camelSlotDir(i)` — где сейчас место верблюда `i` в цепочке. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldT0 (live)` |
 | `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. | `ride {camel, target, progress, hint}, camelRider, updateRide` |
 | `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `addPosFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. У каждого remote хранится последний `pos` целиком (`r.last`) — для полей других модулей. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, addPosFields, onNetChange, updateNet` |
@@ -40,7 +41,8 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience
+  main --> ui & debug & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience & steps
+  steps --> house & player & audio & world & params & state
   ui --> roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
   debug --> ui & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
   house --> ride & player & town & world & scene & params & state
@@ -66,7 +68,7 @@ flowchart TD
 ```
 
 Слои сверху вниз: **оркестрация** (`main`, `debug`) → **UI и сетевые надстройки** (`ui`, `roomsync`) →
-**игровая логика** (`player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`) → **транспорт и звук** (`net`, `audio`) →
+**игровая логика** (`player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`, `steps`) → **транспорт и звук** (`net`, `audio`) →
 **мир** (`town`, `forest`, `props`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
 
 ## Состояние: кто владеет, кто пишет
@@ -86,7 +88,7 @@ flowchart TD
 | `caravan {dir, tan, s, trail, camels, herders, simT}` | `caravan` | `caravan.stepCaravan` | `ui` (HUD), `debug` |
 | `worldT0` | `caravan` | `caravan` (localStorage, `hello.t0`) | `caravan`, `debug` |
 | `net {peer, slot, conns, remotes, status}` | `net` | `net` | `roomsync`, `ui`, `messages` (цвет чужого шара) |
-| `audio {ctx, bus, …}` | `audio` | `audio.initAudio` | `caravan`, `ambience`, `debug` |
+| `audio {ctx, bus, selfBus, …}` | `audio` | `audio.initAudio` | `caravan`, `ambience`, `bow` (тетива), `steps`, `debug` |
 
 Правило: экспортируемые `let` (`audio`, `worldT0`, `exploredPct`) — живые привязки, снаружи только читаются;
 всё, что пишут несколько модулей, лежит в объектах-контейнерах (`player`, `P`, `roomState`, `net`, `caravan`).
@@ -131,6 +133,7 @@ updateBow(dt)            bow        лук в лесу (покачивание, 
 updateCaravan()          caravan    догнать worldTime() шагами по 50 мс (stepCaravan — детерминированно),
                                     поставить верблюдов по следу, погонщиков сбоку, анимация, колокольчики/шаги/ворчание
 updateAmbience()         ambience   громкость шин леса/города, планирование птиц, зверей, музыки, кухни
+updateSteps(dt)          steps      путь за кадр → шаг по покрытию под ногами; приземление; телепорт/вход в дом — сброс
 updateNet(dt)            net        своя pos ~12 Гц; чужие аватары — интерполяция и постановка на поверхность
 updateRide(dt)           ride       приручение (progress ± dt), свой верблюд под ногами, чужие седоки (по r.last.c под
                                     их аватаром), пропавший седок → 'back', возвращение отпущенных к camelSlotDir(i).
