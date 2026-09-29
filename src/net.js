@@ -2,7 +2,8 @@
 // Комнат у PeerJS нет — id пиров детерминированные: inner-sphere-<room>-<slot>, slot 0..4. При входе занимаем
 // первый свободный слот (ошибка unavailable-id -> следующий) и соединяемся со всеми занятыми: полный mesh.
 // Инициирует соединение тот, у кого слот больше (иначе оба откроют по каналу); раз в 4 с добираем недостающих.
-// Публичный сигналинг 0.peerjs.com, в нём же STUN/TURN. Один надёжный JSON-канал на пару.
+// Публичный сигналинг 0.peerjs.com, в нём же STUN/TURN. Один надёжный JSON-канал на пару (голос — отдельный
+// media-звонок на ту же пару, voice.js).
 //
 // Сообщения (поле t):
 //   hello  — имя, цвет + поля от других модулей (t0 — caravan.js, plaques — messages.js, room — roomsync.js)
@@ -39,8 +40,8 @@ export function netStatus(s) {
 const helloMsg = () => Object.assign({ t: 'hello', id: ME.id, name: ME.name, color: PLAYER_COLOR.getHex() }, ...helloFields.map(f => f()));
 export function sendHello() { netBroadcast(helloMsg()); }
 
-const slotId = s => `inner-sphere-${ROOM}-${s}`;
-const slotOf = peerId => parseInt(peerId.split('-').pop(), 10);
+export const slotId = s => `inner-sphere-${ROOM}-${s}`;
+export const slotOf = peerId => parseInt(peerId.split('-').pop(), 10);
 
 // ---- слоты и соединения ----
 export function netStart() {

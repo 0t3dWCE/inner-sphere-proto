@@ -14,6 +14,7 @@ import { isOwner, ownerName, publishRoomParams, onRoomChange } from './roomsync.
 import { house } from './house.js';
 import { ride } from './ride.js';
 import { bow } from './bow.js';
+import { voice, toggleMic } from './voice.js';
 
 // ---------- панель параметров ----------
 const form = document.getElementById('params');
@@ -118,13 +119,19 @@ function renderNetPanel() {
   });
   me.append(nameIn);
   add('span', {}, `комната ${ROOM} · игроков: ${1 + net.remotes.size}` + (isOwner() ? ' · вы владелец' : ''));
-  for (const r of net.remotes.values()) {
-    const s = add('span');
+  for (const [slot, r] of net.remotes) {
+    const s = add('span', { className: 'peer' });
+    s.dataset.voice = slot;                            // voice.js подсвечивает говорящего
     s.append(Object.assign(document.createElement('span'), { className: 'dot', style: `background:#${r.color.getHexString()}` }), r.name);
   }
   add('button', {
     type: 'button', onclick: e => { navigator.clipboard?.writeText(location.href); e.target.textContent = 'Скопировано'; setTimeout(() => e.target.textContent = 'Ссылка', 1500); },
   }, 'Ссылка');
+  add('button', {
+    type: 'button', id: 'mic', className: 'mic' + (voice.mic ? ' on' : ''),
+    title: `Микрофон (M). Вас слышно в ${P.VOICE_R} м, лучше в наушниках`, onclick: () => toggleMic(),
+  }, voice.mic ? '🎤 микрофон вкл' : '🎤 микрофон выкл');
+  if (voice.error) add('span', { className: 'status' }, voice.error);
   if (net.status) add('span', { className: 'status' }, net.status);
 }
 onNetChange(renderNetPanel);

@@ -25,12 +25,13 @@
 | `bow.js` | Лук в лесу (место из seed'а, свой RNG), подбор вплотную (запоминается в localStorage комнаты), лук в руке (ребёнок камеры), стрелы: клик без шара → полёт по дуге (`P.ARROW_SPEED`, `P.GRAVITY`), след, втыкание в землю (остаются, FIFO 300); сеть: `arrow {p, v, color}`. Хук `onArrowHit(fn(from, to, arrow))` — проверка попадания по отрезку полёта за кадр (`true` — стрела поглощена). | `bow {have, hint, dir}, arrows, buildBow, updateBow, onArrowHit` |
 | `health.js` | HP игрока (100), урон `damagePlayer`, лечение 8 HP/с после 6 с без урона, смерть (управление замирает через `setPlayerOverride`, верблюд отпускается) и через 4 с возрождение на старте; полоска `#hp`, вспышка `#hurt`, экран `#dead`; флаг `dd` в `pos`. | `HP_MAX, health, damagePlayer, updateHealth` |
 | `monster.js` | Медведракон: модель, ИИ (бродит у центра леса, провожает караван, гонится, возвращается), скорпионы, скелеты, попадания стрел (`onArrowHit`), укусы (`damagePlayer`), звуки, полоса босса `#boss`. Симулирует один хозяин комнаты; сеть: `mon` (снимок), `mhit` (попадание), `mon` в `hello`. | `monster, MON_HP, isMonsterHost, updateMonster, monsterView, debugMonsterHit` |
-| `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`), тетива (`sfxTwang`). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt, sfxTwang` |
+| `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`), тетива (`sfxTwang`). Поправка `THREE.AudioListener`: «верх» слушателя поворачивается вместе с камерой (иначе на сфере лево/право путаются с верхом). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt, sfxTwang` |
+| `voice.js` | Голос: media-звонок PeerJS на каждую пару (звонит больший слот), тишина вместо микрофона до включения (`replaceTrack`), `M`/кнопка — микрофон; у получателя `PannerNode` (equalpower, моно, линейно до `P.VOICE_R`) у рта аватара, в доме — только из того же дома (поле `hi` в `pos`); значок «говорит», подсветка в блоке сети. | `voice, toggleMic, updateVoice, debugVoiceTone, debugVoiceLevels` |
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
 | `steps.js` | Шаги: каденс по пройденному пути (снаружи — `player.pos`, в доме — `house.active.pos`), покрытие (биом, мостовая города, дерево балкона/дома), синтез в `audio.selfBus`, `P.STEPS`. | `updateSteps` |
 | `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`; сеть: поле `t0` в `hello`. `camelSlotDir(i)` — где сейчас место верблюда `i` в цепочке. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldT0 (live)` |
 | `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. `forceDismount()` — ссадить (гибель игрока). | `ride {camel, target, progress, hint}, camelRider, updateRide, forceDismount` |
-| `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `addPosFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. У каждого remote хранится последний `pos` целиком (`r.last`) — для полей других модулей. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, addPosFields, onNetChange, updateNet` |
+| `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `addPosFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. У каждого remote хранится последний `pos` целиком (`r.last`) — для полей других модулей. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, addPosFields, onNetChange, updateNet, slotId, slotOf` |
 | `roomsync.js` | Владелец комнаты и общие параметры: `isOwner`, `publishRoomParams`, приём `params`/`hello.room`, хук `onRoomChange`. | `isOwner, ownerName, publishRoomParams, onRoomChange` |
 | `ui.js` | Весь DOM: панель параметров (`setParam`, блокировка у не-владельцев), блок сети, оверлей/захват мыши, HUD. | `setParam, updateHud` |
 | `debug.js` | `window.dbg` при `?debug`: телепорты, доступ к состоянию. | `installDebug` |
@@ -43,10 +44,11 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & monster & health & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience & steps
+  main --> ui & debug & voice & monster & health & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience & steps
   steps --> house & player & audio & world & params & state
-  ui --> roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
-  debug --> ui & monster & health & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
+  ui --> voice & roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
+  debug --> ui & voice & monster & health & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
+  voice --> house & net & audio & params & state
   monster --> health & bow & caravan & net & audio & terrain & world & fow & scene & params & state
   health --> player & ride & net & audio & params & state
   house --> ride & player & town & world & scene & params & state
@@ -72,7 +74,7 @@ flowchart TD
 ```
 
 Слои сверху вниз: **оркестрация** (`main`, `debug`) → **UI и сетевые надстройки** (`ui`, `roomsync`) →
-**игровая логика** (`monster`, `health`, `player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`, `steps`) → **транспорт и звук** (`net`, `audio`) →
+**игровая логика** (`voice`, `monster`, `health`, `player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`, `steps`) → **транспорт и звук** (`net`, `audio`) →
 **мир** (`town`, `forest`, `props`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
 
 ## Состояние: кто владеет, кто пишет
@@ -83,6 +85,7 @@ flowchart TD
 | `P` — параметры | `params` | `ui.setParam`, `roomsync` (применяет чужие), `params` (загрузка) | все, каждый кадр |
 | `roomState {ver, owner, values}` | `params` | `roomsync`, `ui` (создание комнаты — в localStorage) | `roomsync`, `ui`, `debug` |
 | `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside, rideH, speedBonus, dead}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `ride` (`rideH`, `speedBonus` при посадке/спуске), `health` (`dead`, позиция при возрождении), `debug` (телепорт) | `net` (флаг `in`, `j = jumpH + rideH` в `pos`), `fow`, `messages` (внутри не бросаем), `bow` и `player` (мёртвый не стреляет и не прыгает), `monster` (цель), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
+| `voice {mic, micTrack, error, level, peers: slot → {call, conn, nodes, …}}` | `voice` | `voice` (звонки, `toggleMic`, кадр) | `ui` (кнопка микрофона), `debug` |
 | `health {hp, dead, deadT, lastHit, by}` | `health` | `health` (`damagePlayer` — зовёт `monster` при укусе своего игрока) | `monster` (мёртвый — не цель), `debug` |
 | `monster {gen, dir, fwd, hp, st, tgt, spawned, respawnAt, scorps[], skeletons[], …}` | `monster` | хозяин — `simulate`; остальные — `adopt` снимка | `monster` (вид, укусы, попадания), `debug` |
 | `house.active {h, it, pos, yaw, pitch, vy, grounded}`, `house.hint` | `house` | `house` (контроллер) | `ui` (HUD), `debug` |
@@ -145,6 +148,8 @@ updateNet(dt)            net        своя pos ~12 Гц; чужие авата
 updateRide(dt)           ride       приручение (progress ± dt), свой верблюд под ногами, чужие седоки (по r.last.c под
                                     их аватаром), пропавший седок → 'back', возвращение отпущенных к camelSlotDir(i).
                                     Стоит после updateCaravan (тот ставит всех верблюдов в цепочку) и updateNet (нужны свежие r.pos)
+updateVoice(dt)          voice      панорама каждого собеседника — к рту его аватара (или к его точке в том же доме), гейт
+                                    «не слышно», громкость голосов, значок «говорит», уровень своего микрофона на кнопке
 updateMonster(dt)        monster    хозяин: ИИ монстра и скорпионов, снимок 'mon' 10 Гц; все: интерполяция к монстру, анимация,
                                     переходы (рёв, роды, смерть), укусы своего игрока, полоса босса. После updateRide — караван
                                     и чужие аватары уже на местах
@@ -241,6 +246,24 @@ renderer.render(player.inside ? houseScene : scene, camera)
 - **Скелеты** — список направлений в снимке (до 8), ставятся после анимации падения и переставляются при смене `R`
   (`radiusListeners`).
 
+## Голос (`voice.js`)
+
+- **Звонки.** На каждую пару — отдельный `MediaConnection` PeerJS рядом с каналом данных; звонит больший слот, как и в
+  данных. Звонки начинаются, когда запущен звук (первый клик): входящие до этого ждут в `pendingIn`. Звонок следует за
+  каналом данных: канал пропал или сменился (собеседник перезагрузился), `connectionState` = `failed`/`closed` —
+  звонок закрывается, больший слот перезванивает (`sync` при каждом `onNetChange` и раз в 3 с).
+- **Микрофон.** В звонок сразу уходит трек тишины (`MediaStreamDestination`), поэтому соединение есть и без разрешения
+  на микрофон. Включение — `getUserMedia` (эхо- и шумоподавление, АРУ) и `RTCRtpSender.replaceTrack` во всех звонках,
+  без повторных переговоров; выключение — `track.enabled = false`.
+- **Приём.** `MediaStreamSource → gain (гейт) → PannerNode → voiceBus → destination`, мимо общей громкости. Chrome отдаёт
+  удалённый WebRTC-поток в Web Audio, только если он подключён к медиаэлементу, — держим немой `<audio>`. Панорама:
+  `equalpower` (на колонках чёткое лево/право; HRTF давал ~6 дБ), вход сведён в моно (стерео-вход equalpower сбоку
+  на 6 дБ громче), `linear` от 7 м до `P.VOICE_R`. Позиция — рот аватара; в доме — точка из поля `hi` того же дома
+  (камера в доме стоит в координатах интерьера, мировые позиции там не годятся).
+- **Слушатель.** `THREE.AudioListener` (ребёнок камеры) передаёт Web Audio «верх» из `listener.up` без поворота — это
+  мировой +Y. На сфере это неверно почти везде, поэтому `audio.js` перед каждым обновлением слушателя кладёт в
+  `listener.up` его настоящий мировой верх. Поправка касается и каравана, и города.
+
 ## Сеть: шина в `net.js`
 
 `net.js` знает только про слоты, соединения, `hello`-базу (id, имя, цвет) и `pos`. Остальное — подписки:
@@ -253,6 +276,7 @@ renderer.render(player.inside ? houseScene : scene, camera)
 | `bow` | — | — | `arrow` (`{p, v, color}` → своя копия стрелы в полёте) |
 | `monster` | `mon` (снимок, только у синхронизированных) | — | `hello` (`mon`), `mon` (снимок хозяина), `mhit` (`{k, id, n, by}` — хозяин применяет попадание) |
 | `health` | — | `dd` (лежит мёртвый) | — |
+| `voice` | — | `hi` (`[дом, x, y, z]` — где стоит в доме) | media-звонки PeerJS (`peer.on('call')`), не через шину |
 | `roomsync` | `room` (LWW-регистр) | — | `hello` (`room`), `params` |
 | `ui` | — | — | `onNetChange` → перерисовать блок сети |
 

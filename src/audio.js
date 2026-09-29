@@ -13,9 +13,23 @@ const readyListeners = [];
 // модули, которым нужно что-то повесить на созданный звук (караван цепляет positional к верблюду)
 export function onAudioReady(fn) { readyListeners.push(fn); }
 
+// THREE.AudioListener отдаёт Web Audio «верх» как есть из listener.up (мировой +Y), не поворачивая его вместе с
+// камерой. На сфере верх у каждой точки свой — без поправки слушатель лежит на боку и лево/право путаются с верхом.
+const _lp = new THREE.Vector3(), _lq = new THREE.Quaternion(), _ls = new THREE.Vector3();
+function fixListenerUp(listener) {
+  const base = listener.updateMatrixWorld;
+  listener.updateMatrixWorld = function (force) {
+    THREE.Object3D.prototype.updateMatrixWorld.call(this, force);
+    this.matrixWorld.decompose(_lp, _lq, _ls);
+    this.up.set(0, 1, 0).applyQuaternion(_lq);
+    base.call(this, force);
+  };
+}
+
 export function initAudio() {
   if (audio) return;
   const listener = new THREE.AudioListener();
+  fixListenerUp(listener);
   camera.add(listener);
   const ctx = listener.context;
   if (ctx.state === 'suspended') ctx.resume();

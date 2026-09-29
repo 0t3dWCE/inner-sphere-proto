@@ -22,6 +22,8 @@ export const SCHEMA = [
   ['SOUND_R',    'Радиус звука каравана', 0,      200,  1],
   ['VOLUME',     'Громкость',             0,      1,    0.05],
   ['STEPS',      'Громкость шагов',       0,      1,    0.05],
+  ['VOICE_VOL',  'Громкость голосов',     0,      2,    0.05],
+  ['VOICE_R',    'Голос: слышно до (м)',  10,     100,  1],
   ['SKY_H',      'Высота неба (0 — нет)', 0,      200,  1],
   ['SKY_CLOUDS', 'Облачность',            0,      1,    0.05],
   ['HAZE',       'Дымка: дальность (м)',  20,     2000, 5],
@@ -31,7 +33,7 @@ export const SCHEMA = [
 export const DEFAULTS = {
   R: 80, EYE: 1.7, SPEED: 12, JUMP_V: 7, GRAVITY: 18, MOUSE_SENS: 0.0022, THROW_SPEED: 45, ARROW_SPEED: 60,
   FOW: 1, FOW_R: 0.4, FOW_MEMORY: 0.35, CAMEL_SPEED: 2.5, TAME_T: 45, RIDE_BONUS: 10, SOUND_R: 25, VOLUME: 0.6, STEPS: 0.5,
-  SKY_H: 30, SKY_CLOUDS: 0.5, HAZE: 110, AMBIENCE: 1, TERRAIN_H: 5,
+  VOICE_VOL: 1, VOICE_R: 28, SKY_H: 30, SKY_CLOUDS: 0.5, HAZE: 110, AMBIENCE: 1, TERRAIN_H: 5,
 };
 export const STORAGE_KEY = 'inner-sphere-params';
 
@@ -52,7 +54,7 @@ export const NET_LOCKED = new Set(['R', 'CAMEL_SPEED']);           // в ком�
 if (ROOM) for (const k of NET_LOCKED) P[k] = DEFAULTS[k];
 // Параметры мира в комнате задаёт её создатель (owner) — они рассылаются всем. Личные (мышь, громкость) — у каждого свои.
 // Хранится как LWW-регистр { ver, owner, values }: больший ver выигрывает, лежит в localStorage комнаты.
-export const NET_PERSONAL = new Set(['MOUSE_SENS', 'VOLUME', 'SOUND_R', 'STEPS']);
+export const NET_PERSONAL = new Set(['MOUSE_SENS', 'VOLUME', 'SOUND_R', 'STEPS', 'VOICE_VOL']);
 export const NET_SHARED = new Set(SCHEMA.map(s => s[0]).filter(k => !NET_PERSONAL.has(k) && !NET_LOCKED.has(k)));
 export const ROOM_KEY = 'inner-sphere-room-' + ROOM;
 export const roomState = { ver: 0, owner: null, values: {} };

@@ -15,6 +15,7 @@ import { ride } from './ride.js';
 import { bow, arrows } from './bow.js';
 import { monster, monsterView, isMonsterHost, debugMonsterHit } from './monster.js';
 import { health, damagePlayer } from './health.js';
+import { voice, debugVoiceTone, debugVoiceLevels } from './voice.js';
 import { net } from './net.js';
 import { isOwner } from './roomsync.js';
 import { setParam } from './ui.js';
@@ -28,6 +29,7 @@ export function installDebug() {
     biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED, roomState, isOwner, setParam,
     player, houses, townPlatforms, house, keys, debugEnter, debugExit, ride, bow, arrows,
     monster, monsterView, isMonsterHost, monsterHit: debugMonsterHit, health, damagePlayer,
+    voice, voiceTone: debugVoiceTone, voiceLevels: debugVoiceLevels,
     get worldT0() { return worldT0; },
     get audio() { return audio; },
     get playerBiome() { return player.biome; },
