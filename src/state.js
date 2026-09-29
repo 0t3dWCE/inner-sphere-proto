@@ -38,7 +38,19 @@ export const ME = (() => {
   return me;
 })();
 export const colorOf = id => new THREE.Color().setHSL((hash32('c:' + id) % 360) / 360, 0.72, 0.55);
-export const PLAYER_COLOR = colorOf(ME.id);   // цвет игрока — из его id, одинаков у всех участников
+// цвет игрока: выбранный в панели сети (ME.color) или по умолчанию из id. Один изменяемый объект — модули читают его
+// в момент использования (рамка таблички, перья стрелы, hello), поэтому смена цвета подхватывается без перезагрузки.
+const validColor = c => Number.isInteger(c) && c >= 0 && c <= 0xffffff;
+export const PLAYER_COLOR = validColor(ME.color) ? new THREE.Color(ME.color) : colorOf(ME.id);
+const colorListeners = [];
+export function onPlayerColor(fn) { colorListeners.push(fn); }
+export function setPlayerColor(hex) {
+  if (!validColor(hex) || hex === PLAYER_COLOR.getHex()) return;
+  PLAYER_COLOR.setHex(hex);
+  ME.color = hex;
+  localStorage.setItem('inner-sphere-me', JSON.stringify(ME));
+  for (const fn of colorListeners) fn(PLAYER_COLOR);
+}
 export const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('');
 
 // ---------- геометрические константы мира ----------

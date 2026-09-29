@@ -3,7 +3,7 @@
 // Клик: шар летит туда, куда смотрит камера, притягивается к стенке и, коснувшись её, становится табличкой.
 // Таблички — G-Set: записи { id, text, color, n, author, ts } только добавляются, слияние с сетью по id.
 import * as THREE from 'three';
-import { ROOM, ME, PLAYER_COLOR, newId, player } from './state.js';
+import { ROOM, ME, PLAYER_COLOR, onPlayerColor, newId, player } from './state.js';
 import { P } from './params.js';
 import { renderer, scene, camera } from './scene.js';
 import { fogify } from './fow.js';
@@ -29,9 +29,9 @@ function ballMaterialFor(color) {
   })));
   return ballMats.get(key);
 }
-const ballMaterial = ballMaterialFor(PLAYER_COLOR);
 // шар "в руке" — ребёнок камеры; при FOV 75 и дистанции 2 радиус 0.23 даёт ~15% высоты экрана
-const heldBall = new THREE.Mesh(new THREE.SphereGeometry(0.23, 32, 16), ballMaterial);
+const heldBall = new THREE.Mesh(new THREE.SphereGeometry(0.23, 32, 16), ballMaterialFor(PLAYER_COLOR));
+onPlayerColor(c => { heldBall.material = ballMaterialFor(c); });   // уже поставленные таблички остаются своего цвета
 heldBall.position.set(1.05, -0.5, -2);
 heldBall.visible = false;
 camera.add(heldBall);

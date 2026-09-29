@@ -1,6 +1,6 @@
 // Весь DOM: панель параметров (правый верхний угол), блок сети (слева), оверлей с захватом мыши, HUD.
 import * as THREE from 'three';
-import { ROOM, ME, PLAYER_COLOR, newId, player } from './state.js';
+import { ROOM, ME, PLAYER_COLOR, setPlayerColor, newId, player } from './state.js';
 import { SCHEMA, DEFAULTS, P, STORAGE_KEY, NET_LOCKED, NET_SHARED, NET_PERSONAL, saveParams, sharedValues } from './params.js';
 import { renderer } from './scene.js';
 import { clearExplored, exploredPct, fowUniforms } from './fow.js';
@@ -80,12 +80,23 @@ document.getElementById('reset').addEventListener('click', () => {
 
 // ---------- блок сети ----------
 const netEl = document.getElementById('net');
+// выбор своего цвета: рамка табличек, шар в руке, перья стрел, аватар у других. Пока тянем ползунок — меняем локально,
+// остальным рассылаем hello по отпусканию (change), чтобы не пересобирать их аватар на каждый пиксель
+function colorPicker() {
+  const el = Object.assign(document.createElement('input'), {
+    type: 'color', className: 'color', value: '#' + PLAYER_COLOR.getHexString(),
+    title: 'Ваш цвет: рамка табличек, перья стрел, аватар',
+  });
+  el.addEventListener('input', () => setPlayerColor(parseInt(el.value.slice(1), 16)));
+  el.addEventListener('change', () => { setPlayerColor(parseInt(el.value.slice(1), 16)); if (ROOM) sendHello(); });
+  return el;
+}
 function renderNetPanel() {
   refreshPanelLock();
   netEl.replaceChildren();
   const add = (tag, props = {}, text) => { const el = Object.assign(document.createElement(tag), props); if (text != null) el.textContent = text; netEl.appendChild(el); return el; };
   if (!ROOM) {
-    add('span', {}, 'Одиночный режим');
+    add('span', {}, 'Одиночный режим').prepend(colorPicker());
     add('button', {
       type: 'button', onclick: () => {
         const id = newId().slice(0, 6);
@@ -98,7 +109,7 @@ function renderNetPanel() {
     return;
   }
   const me = add('span');
-  me.append(Object.assign(document.createElement('span'), { className: 'dot', style: `background:#${PLAYER_COLOR.getHexString()}` }));
+  me.append(colorPicker());
   const nameIn = Object.assign(document.createElement('input'), { value: ME.name, maxLength: 20, title: 'Ваше имя' });
   nameIn.addEventListener('change', () => {
     ME.name = nameIn.value.trim() || ME.name; nameIn.value = ME.name;

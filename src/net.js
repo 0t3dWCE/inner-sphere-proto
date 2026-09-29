@@ -127,7 +127,15 @@ function makeNameSprite(name, color) {
 function upsertRemote(slot, msg) {
   let r = net.remotes.get(slot);
   const color = new THREE.Color(msg.color);
-  if (r && (r.name !== msg.name || r.color.getHex() !== color.getHex())) { scene.remove(r.group); r = null; }
+  if (r && (r.name !== msg.name || r.color.getHex() !== color.getHex())) {
+    // сменил имя или цвет — пересобираем только аватар, позиция и последний pos остаются
+    const visible = r.group.visible;
+    scene.remove(r.group);
+    r.name = msg.name; r.color = color;
+    r.group = makeAvatar(color, msg.name);
+    r.group.visible = visible;
+    scene.add(r.group);
+  }
   if (!r) {
     r = { id: msg.id, name: msg.name, color, group: makeAvatar(color, msg.name),
           pos: null, target: new THREE.Vector3(), fwd: new THREE.Vector3(0, 0, -1), tfwd: new THREE.Vector3(0, 0, -1), jump: 0 };

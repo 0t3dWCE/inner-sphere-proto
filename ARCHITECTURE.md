@@ -9,7 +9,7 @@
 
 | Модуль | За что отвечает | Экспортирует (главное) |
 |---|---|---|
-| `state.js` | «Дно» графа: комната `ROOM`, личность `ME`, seed и RNG мира (`rand`, `randCaravan`), `START_DIR`, `randomDir`, контейнер игрока `player`, часы `clock`. Никого не импортирует. | `ROOM, ME, PLAYER_COLOR, WORLD_SEED, rand, randCaravan, randomDir, START_DIR, player, clock, newId, hash32` |
+| `state.js` | «Дно» графа: комната `ROOM`, личность `ME`, seed и RNG мира (`rand`, `randCaravan`), `START_DIR`, `randomDir`, контейнер игрока `player`, часы `clock`, цвет игрока (`PLAYER_COLOR` — один изменяемый `THREE.Color`, `setPlayerColor` сохраняет выбор в `ME.color` и зовёт подписчиков `onPlayerColor`). Никого не импортирует. | `ROOM, ME, PLAYER_COLOR, setPlayerColor, onPlayerColor, WORLD_SEED, rand, randCaravan, randomDir, START_DIR, player, clock, newId, hash32` |
 | `params.js` | Схема панели, `DEFAULTS`, живой объект `P`, сохранение в localStorage, наборы `NET_LOCKED / NET_SHARED / NET_PERSONAL`, LWW-регистр комнаты `roomState`. | `SCHEMA, DEFAULTS, P, saveParams, roomState, sharedValues, applyRoomValues, saveRoomState` |
 | `scene.js` | Renderer, `scene`, `camera`, свет, `resize`. | `renderer, scene, camera, sun` |
 | `fow.js` | Туман войны и дымка: общие `fowUniforms`, GLSL-вставки, `fogify()` для любого материала, карта разведки, `updateFow()`. | `fogify, fowUniforms, FOW_FRAG_*, clearExplored, exploredPct, updateFow, SKY_COLOR, FOW_COLOR` |
@@ -75,6 +75,7 @@ flowchart TD
 
 | Состояние | Живёт в | Пишут | Читают |
 |---|---|---|---|
+| `PLAYER_COLOR`, `ME.color` | `state` | `ui` (поле выбора цвета → `setPlayerColor`) | `messages` (шар в руке — через `onPlayerColor`, рамка таблички и `ball` — в момент броска), `bow` (перья, `arrow`), `net` (`hello.color`; у получателя аватар пересобирается на месте), `ui` |
 | `P` — параметры | `params` | `ui.setParam`, `roomsync` (применяет чужие), `params` (загрузка) | все, каждый кадр |
 | `roomState {ver, owner, values}` | `params` | `roomsync`, `ui` (создание комнаты — в localStorage) | `roomsync`, `ui`, `debug` |
 | `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside, rideH, speedBonus}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `ride` (`rideH`, `speedBonus` при посадке/спуске), `debug` (телепорт) | `net` (флаг `in`, `j = jumpH + rideH` в `pos`), `fow`, `messages` (внутри не бросаем), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
