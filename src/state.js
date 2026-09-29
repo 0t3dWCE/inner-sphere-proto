@@ -75,6 +75,7 @@ export const player = {
   inside: null,                              // внутри дома: { house: idx, floor } — иначе null (house.js)
   rideH: 0,                                  // подъём глаз над землёй, когда сидим на верблюде (ride.js)
   speedBonus: 0,                             // прибавка к скорости ходьбы, м/с (ride.js)
+  dead: false,                               // загрызли — лежим до возрождения (health.js): ни ходьбы, ни пробела, ни выстрелов
 };
 
 // общие часы кадра: elapsedTime — анимации каравана и тумана войны, getDelta — в tick

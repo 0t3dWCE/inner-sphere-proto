@@ -123,27 +123,30 @@ handBow.visible = false;
 camera.add(handBow);   // камера уже в scene (messages.js)
 
 // ---------- стрелы ----------
-const flying = [];   // { g, vel }
+const flying = [];   // { g, vel, own } — own: выпущена нами (о попадании сообщаем мы)
 const stuck = [];    // торчащие, FIFO
 export const arrows = { flying, stuck };   // для отладки
-function spawnArrow(p, v, color) {
+// цели (monster.js): fn(from, to, arrow) -> true, если стрела попала и цель её забрала (воткнула в себя или убрала)
+const hitTests = [];
+export function onArrowHit(fn) { hitTests.push(fn); }
+function spawnArrow(p, v, color, own = false) {
   const g = makeArrow(color);
   g.position.copy(p);
   g.quaternion.setFromUnitVectors(_t.set(0, 0, 1), _n.copy(v).normalize());
   g.userData.trail.scale.z = Math.min(4, v.length() * 0.05);
   scene.add(g);
-  flying.push({ g, vel: v.clone() });
+  flying.push({ g, vel: v.clone(), own });
 }
 let lastShot = -1;
 function shoot() {
-  if (!bow.have || holding() || player.inside) return;
+  if (!bow.have || holding() || player.inside || player.dead) return;
   const now = clock.elapsedTime;
   if (now - lastShot < COOLDOWN) return;
   lastShot = now;
   const dir = camera.getWorldDirection(new THREE.Vector3());
   const p = camera.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, 0.8);
   const v = dir.multiplyScalar(P.ARROW_SPEED);
-  spawnArrow(p, v, PLAYER_COLOR);
+  spawnArrow(p, v, PLAYER_COLOR, true);
   if (audio) sfxTwang();
   netBroadcast({ t: 'arrow', p: p.toArray(), v: v.toArray(), color: PLAYER_COLOR.getHex() });
 }
@@ -157,7 +160,7 @@ onNet('arrow', (m, slot) => {
 });
 
 // ---------- кадр ----------
-const _g = new THREE.Vector3(), _d = new THREE.Vector3();
+const _g = new THREE.Vector3(), _d = new THREE.Vector3(), _from = new THREE.Vector3();
 export function updateBow(dt) {
   const t = clock.elapsedTime;
   bow.hint = '';
@@ -176,10 +179,16 @@ export function updateBow(dt) {
     const a = flying[i];
     _g.copy(a.g.position).normalize().multiplyScalar(P.GRAVITY);
     a.vel.addScaledVector(_g, dt);
+    _from.copy(a.g.position);
     a.g.position.addScaledVector(a.vel, dt);
     _d.copy(a.vel).normalize();
     a.g.quaternion.setFromUnitVectors(_t.set(0, 0, 1), _d);
     a.g.userData.trail.scale.z = Math.min(4, a.vel.length() * 0.05);
+    if (hitTests.some(fn => fn(_from, a.g.position, a))) {
+      a.g.userData.trail.visible = false;
+      flying.splice(i, 1);
+      continue;
+    }
     _n.copy(a.g.position).normalize();
     // наконечник (на +Z от центра) достиг земли
     const tipR = a.g.position.length() + _d.dot(_n) * (ARROW_LEN / 2 + 0.2);

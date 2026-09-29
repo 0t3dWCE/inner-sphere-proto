@@ -22,12 +22,14 @@
 | `house.js` | Интерьеры: отдельная сцена `houseScene` с плоским полом, генератор дома из seed+номер (этажи, лестница, перегородки, мебель, обои, «особенность»), контроллер ходьбы внутри (перехватывает управление через `setPlayerOverride`), вход/выход через дверь и балконы (`onSpace`). | `houseScene, house {active, hint}, updateHouse, debugEnter, debugExit` |
 | `player.js` | Ввод (клавиатура, мышь), ходьба, прыжок, коллизии с городом и ёлками, удержание на рельефе и на балконных площадках, камера. Пишет `state.player`. Точки расширения: `onSpace(fn)` — перехват пробела, `setPlayerOverride({update, mouse, jump})` — отдать управление другому контроллеру. | `updatePlayer, setPitch, onSpace, setPlayerOverride, keys, townXZ, nearTown, platform` |
 | `messages.js` | Шары-сообщения и таблички (G-Set), форма чата, бросок по клику, сеть: `ball`, `plaque`, поле `plaques` в `hello`. `holding()` — шар в руке (тогда клик бросает, а не стреляет). | `plaques, holding, loadPlaques, updateMessages` |
-| `bow.js` | Лук в лесу (место из seed'а, свой RNG), подбор вплотную (запоминается в localStorage комнаты), лук в руке (ребёнок камеры), стрелы: клик без шара → полёт по дуге (`P.ARROW_SPEED`, `P.GRAVITY`), след, втыкание в землю (остаются, FIFO 300); сеть: `arrow {p, v, color}`. | `bow {have, hint, dir}, arrows, buildBow, updateBow` |
+| `bow.js` | Лук в лесу (место из seed'а, свой RNG), подбор вплотную (запоминается в localStorage комнаты), лук в руке (ребёнок камеры), стрелы: клик без шара → полёт по дуге (`P.ARROW_SPEED`, `P.GRAVITY`), след, втыкание в землю (остаются, FIFO 300); сеть: `arrow {p, v, color}`. Хук `onArrowHit(fn(from, to, arrow))` — проверка попадания по отрезку полёта за кадр (`true` — стрела поглощена). | `bow {have, hint, dir}, arrows, buildBow, updateBow, onArrowHit` |
+| `health.js` | HP игрока (100), урон `damagePlayer`, лечение 8 HP/с после 6 с без урона, смерть (управление замирает через `setPlayerOverride`, верблюд отпускается) и через 4 с возрождение на старте; полоска `#hp`, вспышка `#hurt`, экран `#dead`; флаг `dd` в `pos`. | `HP_MAX, health, damagePlayer, updateHealth` |
+| `monster.js` | Медведракон: модель, ИИ (бродит у центра леса, провожает караван, гонится, возвращается), скорпионы, скелеты, попадания стрел (`onArrowHit`), укусы (`damagePlayer`), звуки, полоса босса `#boss`. Симулирует один хозяин комнаты; сеть: `mon` (снимок), `mhit` (попадание), `mon` в `hello`. | `monster, MON_HP, isMonsterHost, updateMonster, monsterView, debugMonsterHit` |
 | `audio.js` | Ядро Web Audio: контекст, шины, `initAudio()`, хук `onAudioReady`, звуки каравана (`sfxBell/Thud/Grunt`), тетива (`sfxTwang`). | `audio (live), initAudio, onAudioReady, sfxBell, sfxThud, sfxGrunt, sfxTwang` |
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
 | `steps.js` | Шаги: каденс по пройденному пути (снаружи — `player.pos`, в доме — `house.active.pos`), покрытие (биом, мостовая города, дерево балкона/дома), синтез в `audio.selfBus`, `P.STEPS`. | `updateSteps` |
 | `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`; сеть: поле `t0` в `hello`. `camelSlotDir(i)` — где сейчас место верблюда `i` в цепочке. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldT0 (live)` |
-| `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. | `ride {camel, target, progress, hint}, camelRider, updateRide` |
+| `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. `forceDismount()` — ссадить (гибель игрока). | `ride {camel, target, progress, hint}, camelRider, updateRide, forceDismount` |
 | `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `addPosFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. У каждого remote хранится последний `pos` целиком (`r.last`) — для полей других модулей. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, addPosFields, onNetChange, updateNet` |
 | `roomsync.js` | Владелец комнаты и общие параметры: `isOwner`, `publishRoomParams`, приём `params`/`hello.room`, хук `onRoomChange`. | `isOwner, ownerName, publishRoomParams, onRoomChange` |
 | `ui.js` | Весь DOM: панель параметров (`setParam`, блокировка у не-владельцев), блок сети, оверлей/захват мыши, HUD. | `setParam, updateHud` |
@@ -41,10 +43,12 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience & steps
+  main --> ui & debug & monster & health & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience & steps
   steps --> house & player & audio & world & params & state
   ui --> roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
-  debug --> ui & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
+  debug --> ui & monster & health & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
+  monster --> health & bow & caravan & net & audio & terrain & world & fow & scene & params & state
+  health --> player & ride & net & audio & params & state
   house --> ride & player & town & world & scene & params & state
   ride --> caravan & net & terrain & params & state
   bow --> messages & audio & net & forest & terrain & world & fow & scene & params & state
@@ -68,7 +72,7 @@ flowchart TD
 ```
 
 Слои сверху вниз: **оркестрация** (`main`, `debug`) → **UI и сетевые надстройки** (`ui`, `roomsync`) →
-**игровая логика** (`player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`, `steps`) → **транспорт и звук** (`net`, `audio`) →
+**игровая логика** (`monster`, `health`, `player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`, `steps`) → **транспорт и звук** (`net`, `audio`) →
 **мир** (`town`, `forest`, `props`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
 
 ## Состояние: кто владеет, кто пишет
@@ -78,7 +82,9 @@ flowchart TD
 | `PLAYER_COLOR`, `ME.color` | `state` | `ui` (поле выбора цвета → `setPlayerColor`) | `messages` (шар в руке — через `onPlayerColor`, рамка таблички и `ball` — в момент броска), `bow` (перья, `arrow`), `net` (`hello.color`; у получателя аватар пересобирается на месте), `ui` |
 | `P` — параметры | `params` | `ui.setParam`, `roomsync` (применяет чужие), `params` (загрузка) | все, каждый кадр |
 | `roomState {ver, owner, values}` | `params` | `roomsync`, `ui` (создание комнаты — в localStorage) | `roomsync`, `ui`, `debug` |
-| `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside, rideH, speedBonus}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `ride` (`rideH`, `speedBonus` при посадке/спуске), `debug` (телепорт) | `net` (флаг `in`, `j = jumpH + rideH` в `pos`), `fow`, `messages` (внутри не бросаем), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
+| `player {pos, forward, pitch, jumpH, jumpV, biome, groundH, inside, rideH, speedBonus, dead}` | `state` | `player` (кадр), `house` (вход/выход: `inside`, позиция при выходе), `ride` (`rideH`, `speedBonus` при посадке/спуске), `health` (`dead`, позиция при возрождении), `debug` (телепорт) | `net` (флаг `in`, `j = jumpH + rideH` в `pos`), `fow`, `messages` (внутри не бросаем), `bow` и `player` (мёртвый не стреляет и не прыгает), `monster` (цель), `caravan`, `ambience`, `ui`, `main` (какую сцену рендерить) |
+| `health {hp, dead, deadT, lastHit, by}` | `health` | `health` (`damagePlayer` — зовёт `monster` при укусе своего игрока) | `monster` (мёртвый — не цель), `debug` |
+| `monster {gen, dir, fwd, hp, st, tgt, spawned, respawnAt, scorps[], skeletons[], …}` | `monster` | хозяин — `simulate`; остальные — `adopt` снимка | `monster` (вид, укусы, попадания), `debug` |
 | `house.active {h, it, pos, yaw, pitch, vy, grounded}`, `house.hint` | `house` | `house` (контроллер) | `ui` (HUD), `debug` |
 | `ride {camel, target, progress, hint}`, `caravan.camels[i].st {rider, away, dir, seen}` | `ride` | `ride` (кадр, клавиша E, сеть) | `ui` (полоска приручения, HUD), `house` (не пускать верхом), `debug` |
 | `bow {have, hint, dir}`, `arrows {flying, stuck}` | `bow` | `bow` (подбор, клик, сеть, localStorage) | `ui` (HUD), `debug` |
@@ -139,6 +145,10 @@ updateNet(dt)            net        своя pos ~12 Гц; чужие авата
 updateRide(dt)           ride       приручение (progress ± dt), свой верблюд под ногами, чужие седоки (по r.last.c под
                                     их аватаром), пропавший седок → 'back', возвращение отпущенных к camelSlotDir(i).
                                     Стоит после updateCaravan (тот ставит всех верблюдов в цепочку) и updateNet (нужны свежие r.pos)
+updateMonster(dt)        monster    хозяин: ИИ монстра и скорпионов, снимок 'mon' 10 Гц; все: интерполяция к монстру, анимация,
+                                    переходы (рёв, роды, смерть), укусы своего игрока, полоса босса. После updateRide — караван
+                                    и чужие аватары уже на местах
+updateHealth(dt)         health     лечение, отсчёт до возрождения, полоска HP, вспышка урона, экран смерти
 updateSky()              sky        радиус R − SKY_H, облачность
 updateFow(elapsed)       fow        дымка (fog.near/far), униформы тумана войны, uPlayerDir, отметка разведанного,
                                     процент разведки раз в 60 кадров → возвращает fowOn
@@ -210,6 +220,27 @@ renderer.render(player.inside ? houseScene : scene, camera)
   направлению так, чтобы наконечник ушёл в землю на ~0,25 м, след гасится, стрела переходит в `stuck` (FIFO 300, старые
   убираются). Стрелы не переставляются при смене `R` (эфемерны) и не сохраняются между сессиями.
 
+## Монстр (`monster.js`, `health.js`)
+
+- **Хозяин.** Монстра и скорпионов симулирует один игрок — синхронизированный с наименьшим слотом (в одиночной игре —
+  ты), `isMonsterHost()`. Он рассылает снимок `mon` 10 Гц: `{g, d, f, hp, st, tg, sp, rs, sc: [[id, x, y, z, hp]], sk}`
+  (`g` — поколение монстра, `rs` — сколько мс до нового). Остальные принимают снимки **только от хозяина** и плавно
+  тянут к ним свои копии; переходы состояния (`chase`, роды, `dead`) определяют сами по смене `st`/`sp` — отсюда рёв,
+  роды и падение у всех.
+- **Синхронизация новичка.** Вошедший в комнату `synced = false`: не симулирует и не шлёт `mon`, пока не примет чужой
+  снимок (он есть в `hello` каждого синхронизированного) или не пробудет 6 с один. Без этого новичок, занявший слот 0,
+  стал бы хозяином со свежим монстром и сбросил бы идущий бой. Первый принятый снимок — «тихий» (без рёва и падения).
+  Ушёл хозяин — хозяином становится следующий по слоту и продолжает с последнего принятого снимка.
+- **Попадания.** Стрелы проверяет каждый клиент у себя через `bow.onArrowHit` (отрезок полёта за кадр против сфер:
+  голова — 2 урона, туловище — 1, скорпион — 1), но засчитывает только свои (`arrow.own`): хозяин применяет сразу,
+  остальные шлют ему `mhit`. Чужие стрелы просто исчезают в теле. Стрелок в 57 м от монстра становится его целью.
+- **Укусы.** Решает укушенный: каждый клиент по своей копии монстра/скорпионов проверяет дистанцию до себя и зовёт
+  `damagePlayer`. Лежащего мёртвым (`dd` в `pos`) и сидящего в доме монстр не преследует.
+- **Лес.** Шаг монстра, уводящий из леса (`biomeAt !== FOREST`), не делается — пробуются повороты на ±0,5 и ±1,1 рад.
+  Скорпионы ограничения не имеют.
+- **Скелеты** — список направлений в снимке (до 8), ставятся после анимации падения и переставляются при смене `R`
+  (`radiusListeners`).
+
 ## Сеть: шина в `net.js`
 
 `net.js` знает только про слоты, соединения, `hello`-базу (id, имя, цвет) и `pos`. Остальное — подписки:
@@ -220,6 +251,8 @@ renderer.render(player.inside ? houseScene : scene, camera)
 | `caravan` | `t0` | — | `hello` (переход на более ранний `worldT0`) |
 | `ride` | `camel` | `c` | `hello` (`camel`), `camel` |
 | `bow` | — | — | `arrow` (`{p, v, color}` → своя копия стрелы в полёте) |
+| `monster` | `mon` (снимок, только у синхронизированных) | — | `hello` (`mon`), `mon` (снимок хозяина), `mhit` (`{k, id, n, by}` — хозяин применяет попадание) |
+| `health` | — | `dd` (лежит мёртвый) | — |
 | `roomsync` | `room` (LWW-регистр) | — | `hello` (`room`), `params` |
 | `ui` | — | — | `onNetChange` → перерисовать блок сети |
 

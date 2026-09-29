@@ -73,6 +73,26 @@
     }
     #tame .bar { height: 10px; margin-top: 6px; border-radius: 5px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.35); overflow: hidden; }
     #tame .fill { height: 100%; width: 0; background: linear-gradient(90deg, #d9a441, #f2c968); transition: width .1s linear; }
+    #hp {
+      position: fixed; left: 12px; bottom: 18px; z-index: 3; width: 200px; color: #fff; font-size: 12px;
+      text-shadow: 0 1px 2px #000; pointer-events: none; display: none;
+    }
+    #hp .bar, #boss .bar { height: 9px; margin-top: 4px; border-radius: 5px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.35); overflow: hidden; }
+    #hp .fill { height: 100%; width: 100%; background: linear-gradient(90deg, #c53030, #f56565); transition: width .15s linear; }
+    #boss {
+      position: fixed; left: 50%; top: 110px; transform: translateX(-50%); z-index: 3; width: min(440px, 50vw);
+      color: #fff; font-size: 13px; font-weight: 600; text-align: center; text-shadow: 0 1px 3px #000; pointer-events: none; display: none;
+    }
+    #boss .bar { height: 11px; }
+    #boss .fill { height: 100%; width: 100%; background: linear-gradient(90deg, #6b1d1d, #c05621, #d69e2e); transition: width .2s linear; }
+    #hurt {
+      position: fixed; inset: 0; z-index: 4; pointer-events: none; opacity: 0;
+      background: radial-gradient(ellipse at center, rgba(160,0,0,0) 35%, rgba(170,0,0,.85) 100%);
+    }
+    #dead {
+      position: fixed; inset: 0; z-index: 5; pointer-events: none; display: none; align-items: center; justify-content: center;
+      color: #fff; font-size: 26px; font-weight: 600; text-shadow: 0 2px 6px #000; background: rgba(60,0,0,.35);
+    }
   </style>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script type="importmap">
@@ -93,13 +113,17 @@
   </div>
   <div id="crosshair"></div>
   <div id="tame"><span id="tameText"></span><div class="bar"><div class="fill" id="tameFill"></div></div></div>
+  <div id="boss"><span id="bossText"></span><div class="bar"><div class="fill" id="bossFill"></div></div></div>
+  <div id="hp"><span id="hpText"></span><div class="bar"><div class="fill" id="hpFill"></div></div></div>
+  <div id="hurt"></div>
+  <div id="dead"><span id="deadText"></span></div>
   <form id="chat" autocomplete="off">
     <input id="msg" maxlength="140" placeholder="Enter — написать сообщение" />
     <div class="hint" id="chatHint">Enter — «слепить» шар из сообщения · клик — бросить туда, куда смотришь</div>
   </form>
   <div id="overlay">
     Клик, чтобы начать
-    <small>WASD — ходьба · мышь — обзор · Space — прыжок / войти в дом · E — слезть с верблюда · клик — бросить шар / выстрелить из лука · Enter — сообщение · Esc — выйти из захвата мыши</small>
+    <small>WASD — ходьба · мышь — обзор · Space — прыжок / войти в дом · E — слезть с верблюда · клик — бросить шар / выстрелить из лука (в центре леса живёт медведракон — только стрелами) · Enter — сообщение · Esc — выйти из захвата мыши</small>
   </div>
 
   <script type="module" src="./src/main.js"></script>

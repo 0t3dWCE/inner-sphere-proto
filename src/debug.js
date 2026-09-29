@@ -13,6 +13,8 @@ import { audio, initAudio } from './audio.js';
 import { caravan, worldT0, camelSlotDir } from './caravan.js';
 import { ride } from './ride.js';
 import { bow, arrows } from './bow.js';
+import { monster, monsterView, isMonsterHost, debugMonsterHit } from './monster.js';
+import { health, damagePlayer } from './health.js';
 import { net } from './net.js';
 import { isOwner } from './roomsync.js';
 import { setParam } from './ui.js';
@@ -25,6 +27,7 @@ export function installDebug() {
     P, pos, forward, caravan, camera, initAudio, townDir, townObstacles, townToDir, dirToTown,
     biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED, roomState, isOwner, setParam,
     player, houses, townPlatforms, house, keys, debugEnter, debugExit, ride, bow, arrows,
+    monster, monsterView, isMonsterHost, monsterHit: debugMonsterHit, health, damagePlayer,
     get worldT0() { return worldT0; },
     get audio() { return audio; },
     get playerBiome() { return player.biome; },
@@ -72,6 +75,14 @@ export function installDebug() {
       const d = bow.dir;
       _tmp.set(0, 1, 0); if (Math.abs(_tmp.dot(d)) > 0.9) _tmp.set(1, 0, 0);
       const p = d.clone().addScaledVector(_tmp.addScaledVector(d, -_tmp.dot(d)).normalize(), dist / P.R).normalize();
+      pos.copy(p).multiplyScalar(P.R - P.EYE);
+      forward.copy(d).sub(p);
+      player.jumpH = 0; player.jumpV = 0;
+    },
+    // встать в dist м перед мордой медведракона, лицом к нему
+    goToMonster(dist = 25) {
+      const d = monsterView.dir, f = monsterView.fwd;
+      const p = d.clone().multiplyScalar(Math.cos(dist / P.R)).addScaledVector(f, Math.sin(dist / P.R)).normalize();
       pos.copy(p).multiplyScalar(P.R - P.EYE);
       forward.copy(d).sub(p);
       player.jumpH = 0; player.jumpV = 0;

@@ -22,6 +22,8 @@ import { updateAmbience } from './ambience.js';
 import { updateSteps } from './steps.js';
 import { netStart, updateNet } from './net.js';
 import { updateRide } from './ride.js';
+import { updateMonster } from './monster.js';
+import { updateHealth } from './health.js';
 import './roomsync.js';
 import { updateHud } from './ui.js';
 import { installDebug } from './debug.js';
@@ -51,6 +53,8 @@ function tick() {
   updateSteps(dt);        // звук шагов по пройденному пути и покрытию под ногами (снаружи и в доме)
   updateNet(dt);          // своя позиция ~12 Гц, интерполяция чужих аватаров
   updateRide(dt);         // приручение, свой верблюд под ногами, чужие седоки, возвращение отпущенных (после каравана и сети)
+  updateMonster(dt);      // медведракон и скорпионы: симуляция у хозяина + снимок в сеть, копии у всех, укусы, скелеты
+  updateHealth(dt);       // HP игрока: лечение, смерть и возрождение, красная вспышка, полоска
   updateSky();            // радиус и облачность неба
   const fowOn = updateFow(clock.elapsedTime);   // дымка, униформы тумана войны, карта разведки
   updateHud(fowOn);

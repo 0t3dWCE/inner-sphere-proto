@@ -79,7 +79,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Enter') { e.preventDefault(); document.getElementById('msg').focus(); return; }
   keys.add(e.code);
   if (e.code === 'Space') {
-    if (e.repeat) return;   // автоповтор не должен дёргать вход/выход туда-обратно
+    if (e.repeat || player.dead) return;   // автоповтор не должен дёргать вход/выход туда-обратно
     for (const fn of spaceHandlers) if (fn()) return;
     if (override) { override.jump(); return; }
     const onGround = player.jumpH === 0 || (platform && Math.abs(player.jumpH - platform.h) < 0.05);

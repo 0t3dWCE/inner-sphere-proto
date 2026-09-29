@@ -53,6 +53,8 @@ function claimed(i, by) {
   if (ride.target === i) { ride.target = -1; ride.progress = 0; }
 }
 
+export const forceDismount = () => dismount();   // погиб верхом (health.js)
+
 const isTyping = e => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
 addEventListener('keydown', e => {
   if (e.code !== 'KeyE' || e.repeat || isTyping(e)) return;
