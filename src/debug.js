@@ -17,6 +17,7 @@ import { monster, monsterView, isMonsterHost, debugMonsterHit } from './monster.
 import { health, damagePlayer } from './health.js';
 import { voice, debugVoiceTone, debugVoiceLevels } from './voice.js';
 import { oasisDir } from './oasis.js';
+import { isNpcHost, npcSummary, debugNpcHit, debugNpcOut } from './npc.js';
 import { net } from './net.js';
 import { isOwner } from './roomsync.js';
 import { setParam } from './ui.js';
@@ -31,6 +32,7 @@ export function installDebug() {
     player, houses, townPlatforms, house, keys, debugEnter, debugExit, ride, bow, arrows,
     monster, monsterView, isMonsterHost, monsterHit: debugMonsterHit, health, damagePlayer,
     voice, voiceTone: debugVoiceTone, voiceLevels: debugVoiceLevels, oasisDir,
+    npcs: npcSummary, isNpcHost, npcHit: debugNpcHit, npcOut: debugNpcOut,
     get worldT0() { return worldT0; },
     get audio() { return audio; },
     get playerBiome() { return player.biome; },

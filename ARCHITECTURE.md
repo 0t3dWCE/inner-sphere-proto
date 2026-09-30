@@ -30,7 +30,8 @@
 | `voice.js` | Голос: media-звонок PeerJS на каждую пару (звонит больший слот), тишина вместо микрофона до включения (`replaceTrack`), `M`/кнопка — микрофон; у получателя `PannerNode` (equalpower, моно, линейно до `P.VOICE_R`) у рта аватара, в доме — только из того же дома (поле `hi` в `pos`); значок «говорит», подсветка в блоке сети. | `voice, toggleMic, updateVoice, debugVoiceTone, debugVoiceLevels` |
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
 | `steps.js` | Шаги: каденс по пройденному пути (снаружи — `player.pos`, в доме — `house.active.pos`), покрытие (биом, мостовая города, дерево балкона/дома), синтез в `audio.selfBus`, `P.STEPS`. | `updateSteps` |
-| `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`; сеть: поле `t0` в `hello`. `camelSlotDir(i)` — где сейчас место верблюда `i` в цепочке. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldT0 (live)` |
+| `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`. В комнате не догоняет время, пока `releaseCaravan` (узнали, жив ли караван). `haltAt` — отметка остановки, дальше неё шаг не идёт; `camelSlotDir(i)` — где место верблюда `i`. Сеть: поле `t0` в `hello`. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldTime, haltCaravan, releaseCaravan, worldT0 (live)` |
+| `npc.js` | Жители (по одному на дом) и погонщики: бродят, житель иногда выходит на улицы, погонщик иногда отходит от каравана. 5 стрел снаружи — труп до конца сессии. Все погонщики мертвы — `haltCaravan(worldTime())`. Хозяин как у монстра; сеть: `npc`, `nhit`, `npc` в `hello`. | `NPC_HP, isNpcHost, buildNpc, updateNpc, npcSummary, debugNpcHit, debugNpcOut` |
 | `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. `forceDismount()` — ссадить (гибель игрока). | `ride {camel, target, progress, hint}, camelRider, updateRide, forceDismount` |
 | `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `addPosFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. У каждого remote хранится последний `pos` целиком (`r.last`) — для полей других модулей. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, addPosFields, onNetChange, updateNet, slotId, slotOf` |
 | `roomsync.js` | Владелец комнаты и общие параметры: `isOwner`, `publishRoomParams`, приём `params`/`hello.room`, хук `onRoomChange`. | `isOwner, ownerName, publishRoomParams, onRoomChange` |
@@ -45,10 +46,11 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & voice & monster & health & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & oasis & sky & terrain & ambience & steps
+  main --> ui & debug & voice & monster & health & npc & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & oasis & sky & terrain & ambience & steps
   steps --> house & player & audio & world & params & state
   ui --> oasis & voice & roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
-  debug --> ui & oasis & voice & monster & health & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
+  debug --> ui & oasis & voice & monster & health & npc & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
+  npc --> bow & caravan & house & net & player & town & terrain & world & scene & params & state
   voice --> house & net & audio & params & state
   monster --> health & bow & caravan & net & audio & terrain & world & fow & scene & params & state
   health --> player & ride & net & audio & params & state
@@ -76,8 +78,8 @@ flowchart TD
 ```
 
 Слои сверху вниз: **оркестрация** (`main`, `debug`) → **UI и сетевые надстройки** (`ui`, `roomsync`) →
-**игровая логика** (`voice`, `monster`, `health`, `player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`, `steps`) → **транспорт и звук** (`net`, `audio`) →
-**мир** (`town`, `forest`, `props`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
+**игровая логика** (`voice`, `monster`, `health`, `npc`, `player`, `house`, `ride`, `messages`, `bow`, `caravan`, `ambience`, `steps`) → **транспорт и звук** (`net`, `audio`) →
+**мир** (`town`, `forest`, `props`, `oasis`, `sky`, `terrain`, `world`) → **основа** (`fow`, `scene`, `params`, `state`).
 
 ## Состояние: кто владеет, кто пишет
 
@@ -143,8 +145,8 @@ updateMessages(dt)       messages   шары: гравитация от цент
                                     таблички поворачиваются к игроку
 updateBow(dt)            bow        лук в лесу (покачивание, подбор в 1,8 м), стрелы: gravity к стенке, нос по скорости,
                                     след по скорости, наконечник достиг surfaceR → воткнулась (в stuck, FIFO 300)
-updateCaravan()          caravan    догнать worldTime() шагами по 50 мс (stepCaravan — детерминированно),
-                                    поставить верблюдов по следу, погонщиков сбоку, анимация, колокольчики/шаги/ворчание
+updateCaravan()          caravan    догнать worldTime() шагами по 50 мс, но не дальше haltAt (в комнате — только после releaseCaravan),
+                                    поставить верблюдов по следу, погонщиков сбоку (кто ещё при караване), анимация, колокольчики/шаги/ворчание
 updateAmbience()         ambience   громкость шин леса/города, планирование птиц, зверей, музыки, кухни
 updateSteps(dt)          steps      путь за кадр → шаг по покрытию под ногами; приземление; телепорт/вход в дом — сброс
 updateNet(dt)            net        своя pos ~12 Гц; чужие аватары — интерполяция и постановка на поверхность
@@ -153,6 +155,8 @@ updateRide(dt)           ride       приручение (progress ± dt), св�
                                     Стоит после updateCaravan (тот ставит всех верблюдов в цепочку) и updateNet (нужны свежие r.pos)
 updateVoice(dt)          voice      панорама каждого собеседника — к рту его аватара (или к его точке в том же доме), гейт
                                     «не слышно», громкость голосов, значок «говорит», уровень своего микрофона на кнопке
+updateNpc(dt)            npc        хозяин: жители и погонщики, снимок 'npc' 10 Гц; все: кто при караване — как поставил updateCaravan,
+                                    вышедшие и трупы — на сфере, житель в доме виден только тому, кто в этом доме
 updateMonster(dt)        monster    хозяин: ИИ монстра и скорпионов, снимок 'mon' 10 Гц; все: интерполяция к монстру, анимация,
                                     переходы (рёв, роды, смерть), укусы своего игрока, полоса босса. После updateRide — караван
                                     и чужие аватары уже на местах
@@ -249,6 +253,26 @@ renderer.render(player.inside ? houseScene : scene, camera)
 - **Скелеты** — список направлений в снимке (до 8), ставятся после анимации падения и переставляются при смене `R`
   (`radiusListeners`).
 
+## Жители и погонщики (`npc.js`)
+
+- **Кто.** В каждом доме один житель. Погонщики каравана — те же актёры: «дом» жителя — его дом, «дом» погонщика —
+  караван. Идут сами. Житель большую часть времени внутри (пауза, потом новая точка на первом этаже; примерно в
+  четверти случаев идёт к двери и выходит). Снаружи ходит по улицам города 8–20 с и возвращается, за стену не выходит.
+  Погонщик обычно при караване (синус вдоль цепочки, как раньше) и время от времени отходит на 4–6 м, стоит и
+  возвращается. В чужие дома погонщики не заходят. Состояние «идти за игроком» зарезервировано и не сделано.
+- **Стрелы.** 5 попаданий, каждое снимает 1, в голову не удваивается. Стрелять можно только снаружи: житель в доме
+  для стрелы не существует (лук в доме и так не стреляет). Погонщик снаружи всегда. Труп остаётся до конца сессии,
+  заново никто не появляется. В ответ не бьют.
+- **Караван встаёт.** Когда мертвы все погонщики, хозяин один раз ставит `haltAt = worldTime()`. Дальше
+  `updateCaravan` не шагает. `P.CAMEL_SPEED` не трогаем: верблюд, которого уже увели из цепочки, едет как ехал.
+  Отметка уходит в снимке и в `hello`, поэтому опоздавший останавливается в той же точке. Пока отметка неизвестна,
+  караван в комнате не догоняет время (иначе он проскочил бы остановку ещё до `hello`); через 6 с один в комнате или
+  младший слот отпускает его, через 12 с — предохранитель, если снимок так и не пришёл.
+- **Хозяин.** Тот же приём, что у медведракона, отдельный флаг: не симулируем, пока не приняли снимок или не пробыли
+  6 с младшим слотом / в одиночестве. Снимок `npc` ~10 Гц: `{halt, a: [[id, hp, st, ...]]}`. `id` дома — номер дома,
+  погонщика — `100 + i`. Погонщик при караване координаты не шлёт (их и так даёт мировое время). Попадание своей
+  стрелы хозяин применяет сразу, остальные шлют `nhit`.
+
 ## Голос (`voice.js`)
 
 - **Звонки.** На каждую пару — отдельный `MediaConnection` PeerJS рядом с каналом данных; звонит больший слот, как и в
@@ -278,6 +302,7 @@ renderer.render(player.inside ? houseScene : scene, camera)
 | `ride` | `camel` | `c` | `hello` (`camel`), `camel` |
 | `bow` | — | — | `arrow` (`{p, v, color}` → своя копия стрелы в полёте) |
 | `monster` | `mon` (снимок, только у синхронизированных) | — | `hello` (`mon`), `mon` (снимок хозяина), `mhit` (`{k, id, n, by}` — хозяин применяет попадание) |
+| `npc` | `npc` (снимок, только у синхронизированных) | — | `hello` (`npc`), `npc` (снимок хозяина: `halt` и актёры), `nhit` (`{id, n}` — хозяин применяет попадание) |
 | `health` | — | `dd` (лежит мёртвый) | — |
 | `voice` | — | `hi` (`[дом, x, y, z]` — где стоит в доме) | media-звонки PeerJS (`peer.on('call')`), не через шину |
 | `roomsync` | `room` (LWW-регистр) | — | `hello` (`room`), `params` |

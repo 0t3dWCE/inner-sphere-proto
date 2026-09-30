@@ -3,8 +3,11 @@
 // каждые пол-сферы (угол π) кольцо случайно поворачивается. Остальные идут по следу вожака с отставанием
 // по дуге. Стартуют далеко от игрока — в тумане, пока их не разведаешь.
 // Симуляция вожака идёт фиксированным шагом по «мировому времени» (Date.now() - worldT0) и берёт случайности
-// из randCaravan — поэтому у всех участников комнаты с одним seed и одним worldT0 караван в одном месте,
-// без передачи его состояния по сети. worldT0 — момент рождения мира; в комнате все сходятся к самому раннему.
+// из randCaravan — поэтому у всех участников комнаты с одним seed и одним worldT0 караван в одном месте.
+// worldT0 — момент рождения мира; в комнате все сходятся к самому раннему.
+// Если погибли все погонщики, npc.js ставит caravan.haltAt (то же мировое время): шаг дальше этой отметки
+// не делается. Пока комната не узнала, жив ли караван, догонять время нельзя — опоздавший иначе проскочит
+// остановку. В комнате updateCaravan поэтому стоит на месте, пока npc.js не вызовет releaseCaravan.
 import * as THREE from 'three';
 import { ROOM, rand, randCaravan, randomDir, START_DIR, player, clock } from './state.js';
 import { P } from './params.js';
@@ -106,7 +109,9 @@ function makeHerder(robeColor, turbanColor) {
 
 // ---------- состояние каравана ----------
 // { dir, tan, s, travelled, trail, camels, herders, simT, nextGrunt } — заполняется в buildCaravan()
-export const caravan = { dir: null, tan: null, s: 0, travelled: 0, trail: [], camels: [], herders: [], simT: 0, nextGrunt: 0 };
+export const caravan = { dir: null, tan: null, s: 0, travelled: 0, trail: [], camels: [], herders: [], simT: 0, nextGrunt: 0, haltAt: 0 };
+// В комнате не догоняем мировое время, пока npc.js не узнает haltAt (из hello/снимка или «мы одни»).
+let caravanHeld = !!ROOM;
 
 // шаг сборки мира (после города — порядок rand() важен)
 export function buildCaravan() {
@@ -131,6 +136,7 @@ export function buildCaravan() {
     c.lastCycle = -1;
     c.lastStep = [-1, -1, -1, -1];
     c.group.scale.setScalar(0.9 + rand() * 0.25);
+    if (caravanHeld) c.group.visible = false;
     scene.add(c.group);
     camels.push(c);
   }
@@ -158,6 +164,7 @@ export function buildCaravan() {
     h.wanderW = (1.6 / h.wanderAmp) * (0.8 + rand() * 0.4);   // ~пик 1.6 м/с относительно каравана
     h.gaitPhase = rand() * Math.PI * 2;
     h.group.scale.setScalar(0.95 + rand() * 0.12);
+    if (caravanHeld) h.group.visible = false;
     scene.add(h.group);
     caravan.herders.push(h);
   }
@@ -176,7 +183,16 @@ if (ROOM) {
   if (Number.isFinite(saved) && saved < worldT0) worldT0 = saved;
   localStorage.setItem('inner-sphere-t0-' + ROOM, String(worldT0));
 }
-const worldTime = () => (Date.now() - worldT0) / 1000;
+export function worldTime() { return (Date.now() - worldT0) / 1000; }
+// haltAt — мировое время остановки (0 = идёт). Более ранняя отметка побеждает, назад симуляцию не отматываем.
+export function haltCaravan(at) {
+  if (!(at > 0)) return;
+  if (!(caravan.haltAt > 0) || at < caravan.haltAt) caravan.haltAt = at;
+}
+export function releaseCaravan(haltAt = 0) {
+  caravanHeld = false;
+  if (haltAt > 0) haltCaravan(haltAt);
+}
 addHelloFields(() => ({ t0: worldT0 }));
 onNet('hello', m => {
   if (Number.isFinite(m.t0) && m.t0 < worldT0) {          // чужой мир старше — переходим на его часы (караван догонит)
@@ -254,9 +270,17 @@ function stepCaravan(dt) {
 // ---------- кадр ----------
 export function updateCaravan() {
   const cv = caravan, R = P.R;
-  // догоняем мировое время фиксированными шагами (после долгого отсутствия — порциями, чтобы не подвесить кадр)
-  const target = worldTime();
+  // Комната: стоим, пока не известна судьба погонщиков. Предохранитель на 12 с — чтобы сбой снимка не прятал караван навсегда.
+  if (caravanHeld) {
+    if (clock.elapsedTime > 12) caravanHeld = false;
+    else return;
+  }
+  // догоняем мировое время фиксированными шагами, но не дальше остановки (haltAt)
+  const now = worldTime();
+  const target = cv.haltAt > 0 ? Math.min(now, cv.haltAt) : now;
   for (let n = 0; cv.simT + CARAVAN_DT <= target && n < 60000; n++) { stepCaravan(CARAVAN_DT); cv.simT += CARAVAN_DT; }
+  const halted = cv.haltAt > 0 && cv.simT + CARAVAN_DT > cv.haltAt;
+  const spd = halted ? 0 : P.CAMEL_SPEED;
 
   const t = clock.elapsedTime;
   const spacing = CAMEL_SPACING / R;
@@ -270,17 +294,18 @@ export function updateCaravan() {
     if (hear && t > cv.nextGrunt) { sfxGrunt(); cv.nextGrunt = t + 6 + Math.random() * 14; }
   }
   cv.camels.forEach((c, i) => {
+    if (!c.st?.away) c.group.visible = true;
     trailFrame(cv.s - i * spacing);
     c.group.position.copy(_cd).multiplyScalar(surfaceR(_cd) - 0.03);
     c.group.quaternion.setFromRotationMatrix(_m.makeBasis(_cr, _cu, _cf));
 
     // анимация: ноги асинхронно, шея и голова покачиваются, хвост машет, тело чуть подпрыгивает
-    const w = P.CAMEL_SPEED > 0 ? (2.0 + P.CAMEL_SPEED * 0.9) * c.gait : 0.6;
+    const w = spd > 0 ? (2.0 + spd * 0.9) * c.gait : 0.6;
     const ph = t * w + c.phase;
-    const amp = P.CAMEL_SPEED > 0 ? 0.42 : 0.03;
+    const amp = spd > 0 ? 0.42 : 0.03;
     c.legs.forEach((leg, k) => { leg.rotation.x = Math.sin(ph + c.legPhase[k]) * amp; });
     // колокольчик — раз за цикл шага, шаги — когда нога проходит нижнюю точку (фаза кратна π)
-    if (hear && P.CAMEL_SPEED > 0) {
+    if (hear && spd > 0) {
       const cycle = Math.floor((ph + c.legPhase[0]) / (2 * Math.PI));
       if (cycle !== c.lastCycle) { c.lastCycle = cycle; sfxBell(c.bellFreq, 0.12); }
       c.legs.forEach((_, k) => {
@@ -298,6 +323,9 @@ export function updateCaravan() {
   // погонщики: точка на следе = середина цепочки + прогулка по синусу; сдвиг вбок по _cr
   const camelLen = (cv.camels.length - 1) * CAMEL_SPACING;
   for (const h of cv.herders) {
+    // 'out' и 'dead' ставит npc.js; здесь только те, кто ещё при караване
+    if (h.st && h.st !== 'in') continue;
+    h.group.visible = true;
     const wander = Math.sin(t * h.wanderW + h.phase) * h.wanderAmp;            // м, вдоль каравана
     const wanderV = Math.cos(t * h.wanderW + h.phase) * h.wanderAmp * h.wanderW; // м/с относительно каравана
     trailFrame(cv.s + (-camelLen / 2 + wander) / R);
@@ -306,7 +334,7 @@ export function updateCaravan() {
     _cu.copy(_hd).negate();
     _cf.addScaledVector(_cu, -_cf.dot(_cu)).normalize();
     // идёт вперёд, но корпус чуть доворачивает в сторону, куда сейчас смещается вдоль каравана
-    const speed = P.CAMEL_SPEED + wanderV;
+    const speed = spd + wanderV;
     const yaw = THREE.MathUtils.clamp(-h.side * wanderV * 0.18, -0.35, 0.35);
     if (speed < 0) _cf.negate();                                                  // если караван стоит — разворачивается
     _cf.applyAxisAngle(_cu, yaw).normalize();

@@ -19,6 +19,7 @@ import { houseScene, updateHouse } from './house.js';
 import { loadPlaques, updateMessages } from './messages.js';
 import { buildBow, updateBow } from './bow.js';
 import { buildCaravan, updateCaravan } from './caravan.js';
+import { buildNpc, updateNpc } from './npc.js';
 import { updateAmbience } from './ambience.js';
 import { updateSteps } from './steps.js';
 import { netStart, updateNet } from './net.js';
@@ -38,6 +39,7 @@ buildOasis();       // оазис в пустыне (свой RNG; пропсы 
 buildTown();        // дома, стена, ворота
 applyRadius();      // геометрия стенки/воды под текущие R и TERRAIN_H, расстановка всего на поверхности
 buildCaravan();     // верблюды и погонщики
+buildNpc();         // жители домов и состояние погонщиков (свой RNG, rand() мира не тратит)
 buildBow();         // лук в лесу (свой RNG, rand() мира не тратит; нужны ёлки — после buildForest)
 loadPlaques();      // таблички комнаты из localStorage
 netStart();         // PeerJS: занять слот, соединиться с остальными
@@ -57,6 +59,7 @@ function tick() {
   updateNet(dt);          // своя позиция ~12 Гц, интерполяция чужих аватаров
   updateRide(dt);         // приручение, свой верблюд под ногами, чужие седоки, возвращение отпущенных (после каравана и сети)
   updateVoice(dt);        // голоса: панорама у рта собеседника (после сети — аватары на местах), значок «говорит»
+  updateNpc(dt);          // жители и погонщики: симуляция у хозяина, снимок в сеть; караван уже расставил тех, кто при нём
   updateMonster(dt);      // медведракон и скорпионы: симуляция у хозяина + снимок в сеть, копии у всех, укусы, скелеты
   updateHealth(dt);       // HP игрока: лечение, смерть и возрождение, красная вспышка, полоска
   updateSky();            // радиус и облачность неба

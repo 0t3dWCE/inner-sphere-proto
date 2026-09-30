@@ -437,6 +437,35 @@ onSpace(() => {
   return false;
 });
 
+// Жители (npc.js) ходят по уже построенному интерьеру, не добавляя его в сцену: в houseScene дом попадает только при входе игрока.
+export function ensureInterior(h) {
+  let it = built.get(h.idx);
+  if (!it) { it = buildInterior(h); built.set(h.idx, it); }
+  return it;
+}
+const NPC_RAD = 0.32;
+export function interiorMove(it, pos, dx, dz) {
+  pos.x = THREE.MathUtils.clamp(pos.x + dx, -it.W / 2 + 0.4, it.W / 2 - 0.4);
+  pos.z = THREE.MathUtils.clamp(pos.z + dz, -it.D / 2 + 0.4, it.D / 2 - 0.4);
+  for (const o of it.obstacles) {
+    if (pos.y >= o.y1 || pos.y + 1.5 <= o.y0) continue;
+    const cx = THREE.MathUtils.clamp(pos.x, o.x0, o.x1), cz = THREE.MathUtils.clamp(pos.z, o.z0, o.z1);
+    const ddx = pos.x - cx, ddz = pos.z - cz, d2 = ddx * ddx + ddz * ddz;
+    if (d2 >= NPC_RAD * NPC_RAD) continue;
+    if (d2 < 1e-9) {
+      const pen = [pos.x - o.x0, o.x1 - pos.x, pos.z - o.z0, o.z1 - pos.z];
+      const k = pen.indexOf(Math.min(...pen));
+      if (k === 0) pos.x = o.x0 - NPC_RAD; else if (k === 1) pos.x = o.x1 + NPC_RAD;
+      else if (k === 2) pos.z = o.z0 - NPC_RAD; else pos.z = o.z1 + NPC_RAD;
+    } else {
+      const d = Math.sqrt(d2);
+      pos.x = cx + ddx / d * NPC_RAD;
+      pos.z = cz + ddz / d * NPC_RAD;
+    }
+  }
+  pos.y = groundAt(it, pos.x, pos.z, pos.y);
+}
+
 // ---------- управление внутри ----------
 // высота пола под точкой: плита этажа (кроме проёма над лестницей) или наклон лестницы; берём самое высокое из того,
 // что не выше ног + 0.6 (чтобы подниматься по ступеням, но не «телепортироваться» на этаж выше)
