@@ -69,6 +69,17 @@
     #net .status { opacity: .75; font-size: 12px; }
     #net button.mic { background: #4a5568; }
     #net button.mic.on { background: linear-gradient(90deg, #38a169 var(--lvl, 0%), #276749 var(--lvl, 0%)); }
+    #talk {
+      position: fixed; left: 12px; bottom: 18px; z-index: 4;
+      background: #2b6cb0; color: #fff; border: 0; border-radius: 8px;
+      padding: 8px 14px; cursor: pointer; font-size: 14px;
+    }
+    #talk.on { background: #c05621; }
+    #talk.busy { background: #4a5568; }
+    #talkLine {
+      position: fixed; left: 12px; bottom: 56px; z-index: 4; color: #fff;
+      font-size: 14px; max-width: 420px; text-shadow: 0 1px 2px #000; pointer-events: none;
+    }
     #net .peer.talk { color: #9ae6b4; text-shadow: 0 0 6px rgba(154,230,180,.8); }
     #tame {
       position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); z-index: 3; width: min(360px, 70vw);
@@ -124,9 +135,11 @@
     <input id="msg" maxlength="140" placeholder="Enter — написать сообщение" />
     <div class="hint" id="chatHint">Enter — «слепить» шар из сообщения · клик — бросить туда, куда смотришь</div>
   </form>
+  <button id="talk" type="button" title="Удерживайте, чтобы говорить с тем, кто рядом. Клавиша T.">говорить</button>
+  <div id="talkLine"></div>
   <div id="overlay">
     Клик, чтобы начать
-    <small>WASD — ходьба · мышь — обзор · Space — прыжок / войти в дом · E — слезть с верблюда · клик — бросить шар / выстрелить из лука (в центре леса живёт медведракон — только стрелами) · жители домов, погонщики и верблюды падают от пяти стрел, стрела остаётся в теле; без погонщиков караван встаёт · Enter — сообщение · M — микрофон (в комнате) · в пустыне — оазис · Esc — выйти из захвата мыши</small>
+    <small>WASD — ходьба · мышь — обзор · Space — прыжок / войти в дом · E — слезть с верблюда · клик — бросить шар / выстрелить из лука (в центре леса живёт медведракон — только стрелами) · жители домов, погонщики и верблюды падают от пяти стрел, стрела остаётся в теле; без погонщиков караван встаёт · Enter — сообщение · M — микрофон между игроками · T — говорить с тем, кто рядом · в пустыне — оазис · Esc — выйти из захвата мыши</small>
   </div>
 
   <script type="module" src="./src/main.js"></script>

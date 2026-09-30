@@ -1,7 +1,8 @@
 // Жители домов и погонщики каравана.
 // Один тип актёра. «Дома» — свой дом или караван. Житель в основном внутри и иногда выходит на улицы города;
-// погонщик в основном идёт рядом с караваном и иногда отходит на несколько метров. Состояние follow зарезервировано
-// и пока не используется. Стрелять можно только снаружи: внутри дома лук и так не стреляет, а житель в доме
+// погонщик в основном идёт рядом с караваном и иногда отходит на несколько метров. Приказ order
+// (follow, home, here, door, town, oasis, forest, lake) приходит от помощника и на время заменяет эту привычку.
+// here значит стоять на месте, пока не скажут иначе. Стрелять можно только снаружи: внутри дома лук и так не стреляет, а житель в доме
 // для стрелы недосягаем. 5 попаданий — смерть, без множителя в голову. Трупы лежат до конца сессии, заново не появляются.
 // Не дерутся. Хозяин комнаты (младший синхронизированный слот, как у медведракона) симулирует и шлёт снимок ~10 Гц.
 // Когда мертвы все погонщики, караван замирает на отметке мирового времени — скорость каравана не обнуляется,
@@ -11,7 +12,8 @@ import { ROOM, WORLD_SEED, hash32, mulberry32, player, clock } from './state.js'
 import { P } from './params.js';
 import { scene } from './scene.js';
 import { surfaceR } from './terrain.js';
-import { townToDir, dirToTown, TOWN_H, TOWN_STREET } from './world.js';
+import { townToDir, dirToTown, townDir, TOWN_H, TOWN_STREET, biomeAt, BIOME, bioAxis, lakeDir, LAKE_R } from './world.js';
+import { oasisDir } from './oasis.js';
 import { houses, houseLocalToTown, townObstacles } from './town.js';
 import { ensureInterior, interiorMove } from './house.js';
 import { caravan, worldTime, haltCaravan, releaseCaravan } from './caravan.js';
@@ -26,6 +28,7 @@ const IN_SPEED = 1.3;
 const OUT_SPEED = 1.6;
 const HERD_SPEED = 1.5;
 const HERD_BACK = 3.6;
+const FOLLOW_GAP = 2.4;
 const BODY_R = 0.55;
 const CHEST = 1.05;
 
@@ -42,7 +45,7 @@ let snapAcc = 0;
 const lowestSlot = () => Math.min(net.slot < 0 ? Infinity : net.slot, ...net.remotes.keys());
 export const isNpcHost = () => !ROOM || (synced && (net.slot < 0 ? net.remotes.size === 0 : lowestSlot() === net.slot));
 
-const _up = new THREE.Vector3(), _fwd = new THREE.Vector3(), _right = new THREE.Vector3();
+const _up = new THREE.Vector3(), _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _goal = new THREE.Vector3();
 const _m = new THREE.Matrix4(), _axis = new THREE.Vector3(), _before = new THREE.Vector3();
 const _v2 = new THREE.Vector2(), _v2b = new THREE.Vector2();
 const _chest = new THREE.Vector3(), _ab = new THREE.Vector3(), _hit = new THREE.Vector3(), _enter = new THREE.Vector3();
@@ -296,6 +299,7 @@ function markDead(n) {
   n.hp = 0;
   n.st = 'dead';
   n.moving = false;
+  n.order = null;
   if (n.kind === 'herder') maybeHalt();
 }
 function applyHit(n, k) {
@@ -481,7 +485,7 @@ export function buildNpc() {
       yaw: Math.PI, dir: new THREE.Vector3(), face: new THREE.Vector3(0, 0, 1),
       tpos: new THREE.Vector3(), tyaw: Math.PI, tdir: new THREE.Vector3(),
       goal: null, goalTown: null, mode: 'pause', pause: 8 + rng() * 22,
-      outLeft: 0, goalT: 0, phase: rng() * Math.PI * 2, moving: false,
+      outLeft: 0, goalT: 0, phase: rng() * Math.PI * 2, moving: false, order: null,
     };
     interiorMove(it, n.pos, 0, 0);
     n.tpos.copy(n.pos);
@@ -494,7 +498,7 @@ export function buildNpc() {
     const n = {
       id: 100 + i, kind: 'herder', hp: NPC_HP, st: 'in', herder: h, mesh: h.group,
       dir: new THREE.Vector3(), face: new THREE.Vector3(), goalDir: new THREE.Vector3(), tdir: new THREE.Vector3(),
-      phase: 'go', wait: 12 + i * 6 + Math.random() * 18, backT: 0, moving: false,
+      phase: 'go', wait: 12 + i * 6 + Math.random() * 18, backT: 0, moving: false, order: null,
     };
     actors.push(n);
     herderNpcs.push(n);
@@ -509,13 +513,193 @@ export function buildNpc() {
   });
 }
 
+function doorTown(n, extra) {
+  const h = houses[n.house];
+  houseLocalToTown(h, h.doorX, h.d / 2 + extra, _v2);
+  return { x: _v2.x, z: _v2.y };
+}
+function aimAtPlayer() {
+  if (player.inside) {
+    const h = houses[player.inside.house];
+    if (h) {
+      houseLocalToTown(h, h.doorX, h.d / 2 + FOLLOW_GAP, _v2);
+      townToDir(_v2.x, _v2.y, _goal);
+      return;
+    }
+  }
+  _goal.copy(player.pos);
+  if (_goal.lengthSq() > 1) _goal.normalize();
+}
+function followOnSphere(n, dt, speed) {
+  aimAtPlayer();
+  if (_goal.lengthSq() < 0.5 || n.dir.lengthSq() < 0.5) return;
+  if (n.dir.angleTo(_goal) * P.R < FOLLOW_GAP) {
+    n.moving = false;
+    n.face.copy(_goal);
+    return;
+  }
+  dirToTown(n.dir, _v2b);
+  dirToTown(_goal, _v2);
+  const here = Math.abs(_v2b.x) < TOWN_H && Math.abs(_v2b.y) < TOWN_H;
+  const there = Math.abs(_v2.x) < TOWN_H && Math.abs(_v2.y) < TOWN_H;
+  if (n.kind === 'home' && here && there) {
+    const dx = _v2.x - _v2b.x, dz = _v2.y - _v2b.y;
+    const d = Math.hypot(dx, dz) || 1;
+    stepTown(n, _v2.x - dx / d * FOLLOW_GAP, _v2.y - dz / d * FOLLOW_GAP, dt);
+    return;
+  }
+  _before.copy(n.dir);
+  stepToward(n.dir, _goal, speed, dt);
+  rememberFace(n, _before);
+  n.moving = true;
+}
+function leaveHouse(n) {
+  if (n.mode === 'leave') return;
+  n.mode = 'leave';
+  n.goal = { x: n.door.x, z: n.door.z };
+  n.goalT = 0;
+}
+function hold(n) {
+  n.order = 'here';
+  n.moving = false;
+  n.goalT = 0;
+}
+function landmarkDir(where, out) {
+  if (where === 'oasis') return out.copy(oasisDir);
+  if (where === 'forest') return out.copy(bioAxis);
+  if (where === 'lake') return out.copy(lakeDir);
+  if (where === 'town') return out.copy(townDir);
+  return out.set(0, 0, 0);
+}
+function simLandmark(n, dt, speed) {
+  landmarkDir(n.order, _goal);
+  if (_goal.lengthSq() < 0.5 || n.dir.lengthSq() < 0.5) return;
+  const dist = n.dir.angleTo(_goal) * P.R;
+  const biome = biomeAt(n.dir);
+  let done = dist < 4;
+  if (n.order === 'oasis') done = dist < 6;
+  if (n.order === 'town') done = dist < 3;
+  if (n.order === 'forest') done = biome === BIOME.FOREST;
+  if (n.order === 'lake') done = biome === BIOME.WATER || dist < LAKE_R * P.R + 6;
+  n.goalT += dt;
+  if (done || n.goalT > 90) {
+    hold(n);
+    n.face.copy(_goal);
+    return;
+  }
+  if (n.kind === 'home') {
+    dirToTown(n.dir, _v2b);
+    dirToTown(_goal, _v2);
+    const here = Math.abs(_v2b.x) < TOWN_H && Math.abs(_v2b.y) < TOWN_H;
+    const there = Math.abs(_v2.x) < TOWN_H && Math.abs(_v2.y) < TOWN_H;
+    if (here && there) {
+      stepTown(n, _v2.x, _v2.y, dt);
+      return;
+    }
+  }
+  _before.copy(n.dir);
+  stepToward(n.dir, _goal, speed, dt);
+  rememberFace(n, _before);
+  n.moving = true;
+}
+function simHomeOrder(n, dt) {
+  if (n.order === 'here') {
+    n.moving = false;
+    if (n.st === 'out' && player.pos.lengthSq() > 1) n.face.copy(player.pos).normalize();
+    return;
+  }
+  if (n.order === 'home') {
+    if (n.st === 'in') { n.order = null; return; }
+    if (n.mode !== 'home') {
+      const spot = doorTown(n, 1.35);
+      n.mode = 'home';
+      n.goalTown = spot;
+      n.goalT = 0;
+    }
+    simStreet(n, dt);
+    if (n.st === 'in') n.order = null;
+    return;
+  }
+  if (n.order === 'door') {
+    if (n.st === 'in') { leaveHouse(n); simIndoor(n, dt); return; }
+    const spot = doorTown(n, 3.2);
+    n.goalT += dt;
+    if (stepTown(n, spot.x, spot.z, dt) || n.goalT > 20) hold(n);
+    return;
+  }
+  if (n.st === 'in') { leaveHouse(n); simIndoor(n, dt); return; }
+  if (n.order === 'follow') {
+    if (player.inside && player.inside.house === n.house) { n.order = 'home'; return; }
+    followOnSphere(n, dt, OUT_SPEED);
+    return;
+  }
+  simLandmark(n, dt, OUT_SPEED);
+}
+function simHerderOrder(n, dt) {
+  if (n.order === 'here') {
+    if (n.st === 'in' && n.dir.lengthSq() < 0.5) beginHerderTrip(n);
+    n.moving = false;
+    if (n.st === 'out' && player.pos.lengthSq() > 1) n.face.copy(player.pos).normalize();
+    return;
+  }
+  if (n.order === 'home') {
+    if (n.st === 'in') { n.order = null; return; }
+    n.phase = 'back';
+    simHerder(n, dt);
+    if (n.st === 'in') n.order = null;
+    return;
+  }
+  if (n.dir.lengthSq() < 0.5) beginHerderTrip(n);
+  if (n.st !== 'out' || n.dir.lengthSq() < 0.5) return;
+  if (n.order === 'door') {
+    if (n.goalDir.lengthSq() < 0.5) beginHerderTrip(n);
+    _before.copy(n.dir);
+    const arrived = stepToward(n.dir, n.goalDir, HERD_SPEED, dt);
+    rememberFace(n, _before);
+    n.moving = !arrived;
+    n.goalT += dt;
+    if (arrived || n.goalT > 20) hold(n);
+    return;
+  }
+  if (n.order === 'follow') { followOnSphere(n, dt, HERD_SPEED); return; }
+  simLandmark(n, dt, HERD_SPEED);
+}
+function applyOrder(n, where) {
+  if (where === 'stop') {
+    n.order = null;
+    if (n.kind === 'home' && n.st === 'out') {
+      n.mode = 'street';
+      n.outLeft = 8;
+      n.goalTown = streetPoint();
+      n.goalT = 0;
+    }
+    if (n.kind === 'herder' && n.st === 'out') { n.phase = 'back'; n.backT = 0; }
+    return true;
+  }
+  if (where === 'out') where = 'door';
+  if (where !== 'follow' && where !== 'home' && where !== 'door' && where !== 'here'
+    && where !== 'town' && where !== 'oasis' && where !== 'forest' && where !== 'lake') return false;
+  n.order = where;
+  n.goalT = 0;
+  return true;
+}
+export function npcOrder(id, where) {
+  const n = byId(id);
+  if (!n || n.st === 'dead' || (n.kind !== 'home' && n.kind !== 'herder')) return false;
+  if (!isNpcHost()) {
+    netBroadcast({ t: 'norder', id, where });
+    return true;
+  }
+  return applyOrder(n, where);
+}
+
 export function updateNpc(dt) {
   if (dt <= 0 || !actors.length) return;
   considerSync();
   const host = isNpcHost();
   if (host) {
-    for (const n of homeNpcs) if (n.st !== 'dead') (n.st === 'out' ? simStreet(n, dt) : simIndoor(n, dt));
-    for (const n of herderNpcs) if (n.st !== 'dead') simHerder(n, dt);
+    for (const n of homeNpcs) if (n.st !== 'dead') (n.order ? simHomeOrder(n, dt) : (n.st === 'out' ? simStreet(n, dt) : simIndoor(n, dt)));
+    for (const n of herderNpcs) if (n.st !== 'dead') (n.order ? simHerderOrder(n, dt) : simHerder(n, dt));
     snapAcc += dt;
     if (ROOM && synced && snapAcc >= SNAP_DT && net.conns.size) {
       snapAcc = 0;
@@ -546,10 +730,74 @@ onArrowHit((from, to, arrow) => {
 onNet('npc', (s, slot) => adopt(s, slot));
 onNet('hello', (h, slot) => { if (h.npc) adopt(h.npc, slot); });
 onNet('nhit', h => { if (isNpcHost()) applyHit(byId(h.id), h.n | 0); });
+onNet('norder', h => {
+  if (!isNpcHost()) return;
+  const n = byId(h.id);
+  if (n) applyOrder(n, h.where);
+});
 addHelloFields(() => (synced ? { npc: snapshot() } : {}));
 
+const _talkMe = new THREE.Vector3(), _talkAt = new THREE.Vector3();
+function withOrder(n, place) {
+  const tail = {
+    follow: ', идёт за тобой',
+    home: ', идёт домой',
+    door: ', идёт к двери и будет стоять',
+    here: ', стоит где сказали',
+    town: ', идёт в центр города',
+    oasis: ', идёт к оазису',
+    forest: ', идёт к опушке',
+    lake: ', идёт к берегу',
+  }[n.order];
+  return tail ? place + tail : place;
+}
+
+// Кто из говорящих рядом: житель (внутри — только своего дома), погонщик. Верблюды молчат.
+export function talkSnapshot(maxM) {
+  _talkMe.copy(player.pos).normalize();
+  const inside = player.inside ? player.inside.house : null;
+  const out = [];
+  for (const n of actors) {
+    if (n.hp <= 0 || n.st === 'dead') continue;
+    if (n.kind !== 'home' && n.kind !== 'herder') continue;
+    if (n.kind === 'home' && n.st === 'in') {
+      if (inside !== n.house) continue;
+      out.push({
+        id: n.id, kind: 'resident', name: `житель дома ${n.house}`,
+        hp: n.hp, st: 'in', arcM: 1, place: withOrder(n, 'в своём доме'),
+      });
+      continue;
+    }
+    if (inside !== null || !n.mesh) continue;
+    n.mesh.getWorldPosition(_talkAt);
+    if (_talkAt.lengthSq() < 1) continue;
+    const arcM = Math.round(_talkMe.angleTo(_talkAt.normalize()) * P.R * 10) / 10;
+    if (arcM > maxM) continue;
+    const resident = n.kind === 'home';
+    out.push({
+      id: n.id,
+      kind: resident ? 'resident' : 'herder',
+      name: resident ? `житель дома ${n.house}` : 'погонщик',
+      hp: n.hp,
+      st: n.st,
+      arcM,
+      place: withOrder(n, resident ? 'на улице' : 'у каравана'),
+    });
+  }
+  return out;
+}
+
+export function npcMouth(id, out) {
+  const n = byId(id);
+  if (!n || !n.mesh) return false;
+  n.mesh.getWorldPosition(out);
+  return out.lengthSq() > 1;
+}
+
 export function npcSummary() {
-  return actors.map(n => ({ id: n.id, kind: n.kind, hp: n.hp, st: n.st, house: n.house ?? null }));
+  return actors.map(n => ({
+    id: n.id, kind: n.kind, hp: n.hp, st: n.st, house: n.house ?? null, order: n.order || null,
+  }));
 }
 export function debugNpcHit(id = 0, k = 1) {
   const n = byId(id);

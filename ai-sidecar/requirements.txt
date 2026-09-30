@@ -1,0 +1,6 @@
+kokoro>=0.9.4
+soundfile
+ruaccent
+huggingface_hub
+mcp>=1.10
+websockets>=13

@@ -27,6 +27,7 @@ import { updateRide } from './ride.js';
 import { updateMonster } from './monster.js';
 import { updateHealth } from './health.js';
 import { updateVoice } from './voice.js';
+import './talk.js';
 import './roomsync.js';
 import { updateHud } from './ui.js';
 import { installDebug } from './debug.js';
