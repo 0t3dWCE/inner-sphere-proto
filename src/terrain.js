@@ -8,18 +8,26 @@ import { townDir, lakeDir, LAKE_R, BIOME, biomeAtXYZ, lakeAngle, fbm3 } from './
 
 // ---------- рельеф ----------
 // Высота над "нулевым" радиусом R, положительная — к центру (холм), в метрах. Поверхность лежит на радиусе
-// R - h(dir): одна функция для геометрии стенки и для всего, что на ней стоит (surfaceR). Под городом ровно
-// (иначе коробки домов торчат углами), озеро — чаша ниже уровня воды с невысоким берегом, чтобы вода не
-// выплёскивалась в соседние низины.
+// R - h(dir): одна функция для геометрии стенки и для всего, что на ней стоит (surfaceR). Под городом и
+// под оазисом ровно (иначе постройки торчат углами и пол палатки идёт волной), озеро — чаша ниже уровня
+// воды с невысоким берегом, чтобы вода не выплёскивалась в соседние низины.
 const LAKE_DEPTH = 3;
 const TOWN_FLAT0 = 30 / DEFAULTS.R, TOWN_FLAT1 = 44 / DEFAULTS.R;   // поляна: ровно до 30 м, к 44 м — полный рельеф
 const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// дополнительные поляны в метрах (оазис). Угол от текущего R: лагерь сам по себе в метрах и не растёт со сферой.
+const extraFlats = [];
+export function addTerrainFlat(dir, innerM, outerM) { extraFlats.push({ dir, innerM, outerM }); }
 export function terrainH(x, y, z) {
   const A = P.TERRAIN_H;
   if (A <= 0) return 0;
   let h = A * Math.max(-1, Math.min(1, (fbm3(x * 3 + 21.7, y * 3 + 8.1, z * 3 + 3.3) - 0.5) * 4));
   const aTown = Math.acos(Math.min(1, x * townDir.x + y * townDir.y + z * townDir.z));
   h *= sstep(TOWN_FLAT0, TOWN_FLAT1, aTown);
+  for (let i = 0; i < extraFlats.length; i++) {
+    const f = extraFlats[i];
+    const a = Math.acos(Math.min(1, x * f.dir.x + y * f.dir.y + z * f.dir.z));
+    h *= sstep(f.innerM / P.R, f.outerM / P.R, a);
+  }
   const a = lakeAngle(x, y, z);
   if (a < LAKE_R + 0.2) {
     if (a < LAKE_R) return -0.15 - LAKE_DEPTH * Math.max(0, 1 - (a / LAKE_R) ** 2);   // чаша

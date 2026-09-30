@@ -7,12 +7,13 @@ import { WORLD_SEED, hash32, mulberry32 } from './state.js';
 import { P } from './params.js';
 import { scene } from './scene.js';
 import { fogify } from './fow.js';
-import { surfaceR, radiusListeners } from './terrain.js';
+import { surfaceR, radiusListeners, addTerrainFlat } from './terrain.js';
 import { BIOME, biomeAt, bioAxis, townDir, TOWN_H } from './world.js';
 import { props, placeOnWall } from './props.js';
 
 export const OASIS_AVOID = 12;          // м — ближе караван не заходит
 const CLEAR_R = 20;                     // м — поляна без случайных пропсов
+const FLAT_R = 14, FLAT_BLEND = 24;     // м — ровная земля под лагерем, дальше холмы возвращаются (как у города)
 const POOL_R = 2.3;
 
 export const oasisDir = new THREE.Vector3();
@@ -121,25 +122,24 @@ radiusListeners.push(seatAll);
 // ---------- модели: локальный +Y вверх, земля — y = 0 ----------
 function makePalm(h) {
   const g = new THREE.Group();
-  const trunkH = h * 0.74, lean = (rnd() - 0.5) * 0.22;
-  const trunk = new THREE.Mesh(cyl(0.1, 0.2, trunkH, 6), trunkMat);
+  const trunkH = h * 0.82;
+  // один прямой ствол, крона — его ребёнок на торце: с любого ракурса листья сидят на дереве
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.3, trunkH, 7), trunkMat);
   trunk.geometry.translate(0, trunkH / 2, 0);
-  trunk.rotation.z = lean;
-  const ring = new THREE.Mesh(cyl(0.13, 0.13, trunkH * 0.5, 6), trunkDark);
-  ring.geometry.translate(0, trunkH * 0.28, 0);
-  ring.rotation.z = lean;
-  g.add(trunk, ring);
+  g.add(trunk);
   const crown = new THREE.Group();
-  crown.position.set(Math.sin(lean) * trunkH, Math.cos(lean) * trunkH, 0);
-  const n = 6 + Math.floor(rnd() * 3), len = h * 0.42;
+  crown.position.y = trunkH;
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.34, 8, 6), trunkDark);
+  cap.scale.y = 0.65;
+  crown.add(cap);
+  const n = 8, len = h * 0.34;
   for (let i = 0; i < n; i++) {
-    const fr = new THREE.Mesh(new THREE.ConeGeometry(0.14, len, 4), i % 2 ? leafDark : leafMat);
-    fr.geometry.translate(0, len / 2, 0);
-    fr.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), i / n * Math.PI * 2 + rnd() * 0.2)
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 1.05 + rnd() * 0.2));
+    const fr = new THREE.Mesh(new THREE.ConeGeometry(0.2, len, 4), i % 2 ? leafDark : leafMat);
+    fr.geometry.translate(0, len / 2 - 0.28, 0);   // основание листа утоплено в макушку
+    fr.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), i / n * Math.PI * 2)
+      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 1.05));
     crown.add(fr);
   }
-  for (let i = 0; i < 3; i++) crown.add(mesh(new THREE.SphereGeometry(0.09, 6, 5), trunkDark, Math.cos(i * 2) * 0.12, -0.05, Math.sin(i * 2) * 0.12));
   g.add(crown);
   return g;
 }
@@ -240,10 +240,17 @@ function clearProps() {
 
 export function buildOasis() {
   oasisDir.copy(pickCenter());
+  addTerrainFlat(oasisDir, FLAT_R, FLAT_BLEND);   // до applyRadius: и меши, и стенка читают уже ровную высоту
   clearProps();
-  // пальмы вокруг палатки, разной высоты
-  const spots = [[-7.2, -5.6], [8, -6.2], [-6.4, 6.6], [7.6, 6.2], [0.4, -8.6]];
-  const nPalm = 3 + Math.floor(rnd() * 3);
+  // пальмы вокруг стоянки, разной высоты. Первые восемь — всегда, остальные добираются до 15.
+  // Точки снаружи палатки, лужи и привязи, внутри ровной поляны (FLAT_R).
+  const spots = [
+    [-8.2, -6.4], [-3.2, -9.4], [3.4, -9.2], [8.6, -6.0],
+    [10.2, 2.2], [6.8, 7.6], [-7.2, 7.4], [-9.6, 0.8],
+    [-11.2, -3.6], [-6.8, -10.6], [0.2, -11.6], [6.6, -10.2],
+    [11.4, -2.4], [11.0, 5.2], [-11.4, 4.6],
+  ];
+  const nPalm = 8 + Math.floor(rnd() * 8);
   for (let i = 0; i < nPalm; i++) {
     const h = 6 + rnd() * 5.5;
     put(makePalm(h), spots[i][0], spots[i][1], rnd() * Math.PI * 2);

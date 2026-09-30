@@ -14,10 +14,10 @@
 | `scene.js` | Renderer, `scene`, `camera`, свет, `resize`. | `renderer, scene, camera, sun` |
 | `fow.js` | Туман войны и дымка: общие `fowUniforms`, GLSL-вставки, `fogify()` для любого материала, карта разведки, `updateFow()`. | `fogify, fowUniforms, FOW_FRAG_*, clearExplored, exploredPct, updateFow, SKY_COLOR, FOW_COLOR` |
 | `world.js` | Разметка мира без мешей: где город (`townDir`, локальные оси, `townToDir/dirToTown`), оси биомов, озеро, CPU-шум, `biomeAt`. **Первый потребитель `rand()`.** | `townDir, townToDir, dirToTown, TOWN_*, BIOME, BIOME_NAME, biomeAt, biomeAtXYZ, lakeDir, LAKE_R, bioAxis, lakeAngle, fbm3` |
-| `terrain.js` | Рельеф `terrainH/surfaceR`, геометрия стенки и воды, плитка × карта биомов, `paintBiomes()`, `applyRadius()` и реестр `radiusListeners`. | `terrainH, surfaceR, paintBiomes, applyRadius, radiusListeners, sphere, water` |
+| `terrain.js` | Рельеф `terrainH/surfaceR`, геометрия стенки и воды, плитка × карта биомов, `paintBiomes()`, `applyRadius()` и реестр `radiusListeners`. Ровные поляны: город и зоны из `addTerrainFlat` (оазис). | `terrainH, surfaceR, addTerrainFlat, paintBiomes, applyRadius, radiusListeners, sphere, water` |
 | `sky.js` | Сфера-атмосфера с облаками и солнцем, `updateSky()`. | `sky, updateSky` |
 | `props.js` | Реестр объектов на стенке (`addProp/placeOnWall`), палитра, `buildProps()` — цветные коробки и маяки. | `props, addProp, placeOnWall, palette, buildProps` |
-| `oasis.js` | Оазис в пустыне: место своим RNG от seed'а (`rand()` мира не тратит), 3–5 пальм, открытая палатка (ковёр, кальян), лужа и колодец, привязь. Пропсы с поляны переставляет. `oasisBlocks` — круги коллизий. | `oasisDir, oasisBlocks, OASIS_AVOID, buildOasis` |
+| `oasis.js` | Оазис в пустыне: место своим RNG от seed'а (`rand()` мира не тратит), 8–15 пальм, открытая палатка (ковёр, кальян), лужа и колодец, привязь. Пропсы с поляны переставляет. Земля под лагерем ровная (`addTerrainFlat`). `oasisBlocks` — круги коллизий. | `oasisDir, oasisBlocks, OASIS_AVOID, buildOasis` |
 | `forest.js` | Ёлки инстансами: `buildForest()`, `placeTrees()`, массив `trees` для коллизий. | `trees, buildForest, placeTrees` |
 | `town.js` | Дома, стена, ворота, башни: `buildTown()`, AABB-препятствия; метаданные домов `houses[]` (размеры, поворот, дверь, балконы) и площадки балконов `townPlatforms[]`, на которых можно стоять. | `townObstacles, houses, townPlatforms, buildTown, houseLocalToTown, houseDoorNear, townPlatformAt` |
 | `house.js` | Интерьеры: отдельная сцена `houseScene` с плоским полом, генератор дома из seed+номер (этажи, лестница, перегородки, мебель, обои, «особенность»), контроллер ходьбы внутри (перехватывает управление через `setPlayerOverride`), вход/выход через дверь и балконы (`onSpace`). | `houseScene, house {active, hint}, updateHouse, debugEnter, debugExit` |
@@ -115,7 +115,7 @@ flowchart TD
 2. `paintBiomes()` — карта биомов (без `rand`)
 3. `buildForest()` — ёлки
 4. `buildProps()` — цветные коробки, маяки
-5. `buildOasis()` — оазис (свой RNG, `rand()` не тратит; пропсы, попавшие в поляну, переставляет)
+5. `buildOasis()` — оазис (свой RNG, `rand()` не тратит; пропсы, попавшие в поляну, переставляет; холмы под лагерем сводит в ноль)
 6. `buildTown()` — дома, стена, ворота
 7. `applyRadius()` — геометрия стенки и воды под текущие `R`/`TERRAIN_H`, расстановка всего через `radiusListeners`
 8. `buildCaravan()` — верблюды и погонщики
