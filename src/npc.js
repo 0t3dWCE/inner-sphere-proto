@@ -15,6 +15,7 @@ import { townToDir, dirToTown, TOWN_H, TOWN_STREET } from './world.js';
 import { houses, houseLocalToTown, townObstacles } from './town.js';
 import { ensureInterior, interiorMove } from './house.js';
 import { caravan, worldTime, haltCaravan, releaseCaravan } from './caravan.js';
+import { noteCamelDead } from './ride.js';
 import { onArrowHit } from './bow.js';
 import { net, netBroadcast, onNet, addHelloFields } from './net.js';
 
@@ -34,6 +35,7 @@ const CAPS = [0xd8c7a1, 0x2c2a28, 0x8d3b3b, 0x1f3a5f, 0xe8e0d0];
 const actors = [];
 const homeNpcs = [];
 const herderNpcs = [];
+const camelNpcs = [];
 let synced = !ROOM;
 let snapAcc = 0;
 
@@ -43,7 +45,8 @@ export const isNpcHost = () => !ROOM || (synced && (net.slot < 0 ? net.remotes.s
 const _up = new THREE.Vector3(), _fwd = new THREE.Vector3(), _right = new THREE.Vector3();
 const _m = new THREE.Matrix4(), _axis = new THREE.Vector3(), _before = new THREE.Vector3();
 const _v2 = new THREE.Vector2(), _v2b = new THREE.Vector2();
-const _chest = new THREE.Vector3(), _ab = new THREE.Vector3(), _hit = new THREE.Vector3();
+const _chest = new THREE.Vector3(), _ab = new THREE.Vector3(), _hit = new THREE.Vector3(), _enter = new THREE.Vector3();
+const ARROW_TIP = 0.51;   // наконечник впереди центра стрелы
 
 function makePerson(robeColor, capColor) {
   const g = new THREE.Group();
@@ -236,9 +239,7 @@ function simHerder(n, dt) {
   if (n.goalDir.lengthSq() < 0.5) {
     n.phase = 'back';
     n.backT = n.backT || 0;
-    const mid0 = caravan.camels[Math.floor(caravan.camels.length / 2)];
-    if (mid0 && mid0.group.position.lengthSq() > 1) n.goalDir.copy(mid0.group.position).normalize();
-    else { n.st = 'in'; n.herder.st = 'in'; n.wait = 8; return; }
+    if (herdHomeDir(n.goalDir).lengthSq() < 0.5) { n.st = 'in'; n.herder.st = 'in'; n.wait = 8; return; }
   }
   if (n.phase === 'stand') {
     n.wait -= dt;
@@ -247,8 +248,7 @@ function simHerder(n, dt) {
     return;
   }
   if (n.phase === 'back') {
-    const mid = caravan.camels[Math.floor(caravan.camels.length / 2)];
-    if (mid && mid.group.position.lengthSq() > 1) n.goalDir.copy(mid.group.position).normalize();
+    herdHomeDir(n.goalDir);
     n.backT += dt;
   }
   _before.copy(n.dir);
@@ -267,6 +267,11 @@ function simHerder(n, dt) {
   }
 }
 
+function herdHomeDir(out) {
+  const live = caravan.camels.find(c => c.st?.away !== 'dead' && c.group.position.lengthSq() > 1)
+    || caravan.camels[Math.floor(caravan.camels.length / 2)];
+  return live && live.group.position.lengthSq() > 1 ? out.copy(live.group.position).normalize() : out.set(0, 0, 0);
+}
 function maybeHalt() {
   if (caravan.haltAt > 0) return;
   if (herderNpcs.length && herderNpcs.every(n => n.st === 'dead')) haltCaravan(worldTime());
@@ -280,6 +285,13 @@ function markDead(n) {
     }
     n.herder.st = 'dead';
     n.herder.hp = 0;
+  }
+  if (n.kind === 'camel') {
+    if (n.camel.group.position.lengthSq() > 1) {
+      n.dir.copy(n.camel.group.position).normalize();
+      n.face.copy(n.camel.group.getWorldDirection(_fwd));
+    }
+    noteCamelDead(n.id - 200);
   }
   n.hp = 0;
   n.st = 'dead';
@@ -295,28 +307,42 @@ function applyHit(n, k) {
 }
 function outdoors(n) {
   if (n.st === 'dead') return false;
-  if (n.kind === 'herder') return n.st === 'in' || n.st === 'out';
+  if (n.kind === 'herder' || n.kind === 'camel') return true;
   return n.st === 'out';
 }
-function chestAt(mesh, out) {
+function chestAt(mesh, out, lift) {
   mesh.updateWorldMatrix(true, false);
   mesh.getWorldPosition(out);
   _up.copy(out);
   if (_up.lengthSq() < 1e-6) return out;
   _up.normalize().negate();
-  return out.addScaledVector(_up, CHEST);
+  return out.addScaledVector(_up, lift);
 }
+// точка входа отрезка в шар — в _enter; _ab остаётся from→to
 function segHit(from, to, center, r) {
   _ab.copy(to).sub(from);
   const len2 = _ab.lengthSq();
   const t = len2 > 1e-8 ? THREE.MathUtils.clamp(_hit.copy(center).sub(from).dot(_ab) / len2, 0, 1) : 0;
-  return _hit.copy(from).addScaledVector(_ab, t).distanceToSquared(center) <= r * r;
+  _hit.copy(from).addScaledVector(_ab, t);
+  const d2 = _hit.distanceToSquared(center);
+  if (d2 > r * r) return false;
+  const back = len2 > 1e-8 ? Math.sqrt(Math.max(0, r * r - d2)) / Math.sqrt(len2) : 0;
+  _enter.copy(from).addScaledVector(_ab, Math.max(0, t - back));
+  return true;
+}
+function stickArrow(arrow, mesh, embed) {
+  const len = _ab.length();
+  if (len < 1e-6) return;
+  _ab.multiplyScalar(1 / len);
+  arrow.g.position.copy(_enter).addScaledVector(_ab, embed - ARROW_TIP);
+  arrow.g.userData.trail.visible = false;
+  mesh.attach(arrow.g);
 }
 
 const r4 = v => Math.round(v * 1e4) / 1e4;
 function pack(n) {
   const st = n.st === 'in' ? 0 : n.st === 'out' ? 1 : 2;
-  if (n.kind === 'herder' && n.st === 'in') return [n.id, n.hp, st];
+  if ((n.kind === 'herder' || n.kind === 'camel') && n.st === 'in') return [n.id, n.hp, st];
   if (n.kind === 'home' && n.st === 'in') return [n.id, n.hp, st, r4(n.pos.x), r4(n.pos.y), r4(n.pos.z), r4(n.yaw)];
   return [n.id, n.hp, st, r4(n.dir.x), r4(n.dir.y), r4(n.dir.z)];
 }
@@ -337,6 +363,7 @@ function adopt(s, slot) {
     const st = row[2] === 0 ? 'in' : row[2] === 1 ? 'out' : 'dead';
     n.st = st;
     if (n.herder) { n.herder.st = st; n.herder.hp = n.hp; }
+    if (n.kind === 'camel' && st === 'dead') noteCamelDead(n.id - 200);
     if (row.length >= 7) {
       n.tpos.set(row[3], row[4], row[5]);
       n.tyaw = row[6];
@@ -405,6 +432,15 @@ function blendRemote(n, dt) {
   }
 }
 function showActor(n) {
+  if (n.kind === 'camel') {
+    if (n.st !== 'dead') return;
+    if (n.dir.lengthSq() < 0.5 && n.mesh.position.lengthSq() > 1) n.dir.copy(n.mesh.position).normalize();
+    if (n.dir.lengthSq() < 0.5) return;
+    n.mesh.visible = true;
+    placeOnWall(n.mesh, n.dir, n.face);
+    n.mesh.rotateZ(Math.PI / 2);
+    return;
+  }
   if (n.kind === 'herder') {
     if (n.st === 'in') return;
     if (n.dir.lengthSq() < 0.5) return;
@@ -463,6 +499,14 @@ export function buildNpc() {
     actors.push(n);
     herderNpcs.push(n);
   });
+  caravan.camels.forEach((c, i) => {
+    const n = {
+      id: 200 + i, kind: 'camel', hp: NPC_HP, st: 'in', camel: c, mesh: c.group,
+      dir: new THREE.Vector3(), face: new THREE.Vector3(), tdir: new THREE.Vector3(), moving: false,
+    };
+    actors.push(n);
+    camelNpcs.push(n);
+  });
 }
 
 export function updateNpc(dt) {
@@ -486,13 +530,16 @@ export function updateNpc(dt) {
 onArrowHit((from, to, arrow) => {
   for (const n of actors) {
     if (!outdoors(n) || n.mesh.parent !== scene) continue;
-    if (segHit(from, to, chestAt(n.mesh, _chest), BODY_R)) {
-      if (arrow.own) {
-        if (isNpcHost()) applyHit(n, 1);
-        else netBroadcast({ t: 'nhit', id: n.id, n: 1 });
-      }
-      return true;
+    const sc = n.kind === 'camel' ? n.mesh.scale.x : 1;
+    const r = n.kind === 'camel' ? 1.15 * sc : BODY_R;
+    const lift = n.kind === 'camel' ? 1.45 * sc : CHEST;
+    if (!segHit(from, to, chestAt(n.mesh, _chest, lift), r)) continue;
+    stickArrow(arrow, n.mesh, n.kind === 'camel' ? 0.4 : 0.22);
+    if (arrow.own) {
+      if (isNpcHost()) applyHit(n, 1);
+      else netBroadcast({ t: 'nhit', id: n.id, n: 1 });
     }
+    return true;
   }
   return false;
 });

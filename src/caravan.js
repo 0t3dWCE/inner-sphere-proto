@@ -294,6 +294,7 @@ export function updateCaravan() {
     if (hear && t > cv.nextGrunt) { sfxGrunt(); cv.nextGrunt = t + 6 + Math.random() * 14; }
   }
   cv.camels.forEach((c, i) => {
+    if (c.st?.away === 'dead') return;   // труп ставит npc.js
     if (!c.st?.away) c.group.visible = true;
     trailFrame(cv.s - i * spacing);
     c.group.position.copy(_cd).multiplyScalar(surfaceR(_cd) - 0.03);

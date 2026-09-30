@@ -27,7 +27,9 @@ function stateOf(c) {
 export const camelRider = i => { const c = caravan.camels[i]; return c ? stateOf(c).rider : null; };
 
 function mount(i) {
-  const st = stateOf(caravan.camels[i]);
+  const c = caravan.camels[i];
+  if (!c || stateOf(c).away === 'dead') return;
+  const st = stateOf(c);
   st.rider = ME.id; st.away = 'ride'; st.seen = clock.elapsedTime;
   ride.camel = i; ride.target = -1; ride.progress = 0;
   player.rideH = RIDE_H; player.speedBonus = P.RIDE_BONUS;
@@ -44,7 +46,7 @@ function dismount(broadcast = true) {
 // кто-то заявил, что сидит на верблюде i
 function claimed(i, by) {
   const c = caravan.camels[i];
-  if (!c || !by) return;
+  if (!c || !by || stateOf(c).away === 'dead') return;
   const st = stateOf(c);
   if (ride.camel === i) {                       // сели одновременно — уступает тот, у кого id больше
     if (by < ME.id) dismount(false); else return;
@@ -54,6 +56,22 @@ function claimed(i, by) {
 }
 
 export const forceDismount = () => dismount();   // погиб верхом (health.js)
+// верблюд убит: выпадает из цепочки и больше никого не возит. Седок оказывается на земле.
+export function noteCamelDead(i) {
+  const c = caravan.camels[i];
+  if (!c) return;
+  const st = stateOf(c);
+  const wasOurs = ride.camel === i;
+  const already = st.away === 'dead';
+  st.rider = null;
+  st.away = 'dead';
+  if (ride.target === i) { ride.target = -1; ride.progress = 0; }
+  if (!wasOurs) return;
+  ride.camel = -1;
+  player.rideH = 0;
+  player.speedBonus = 0;
+  if (!already && ROOM) netBroadcast({ t: 'camel', i, s: 'dead' });
+}
 
 const isTyping = e => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
 addEventListener('keydown', e => {
@@ -65,6 +83,7 @@ addEventListener('keydown', e => {
 onNet('camel', m => {
   const c = caravan.camels[m.i];
   if (!c) return;
+  if (m.s === 'dead' || stateOf(c).away === 'dead') { noteCamelDead(m.i); return; }
   if (m.s === 'ride') claimed(m.i, m.by);
   else if (m.s === 'back') {
     const st = stateOf(c);
@@ -130,11 +149,14 @@ export function updateRide(dt) {
     }
   }
 
-  // свой верблюд — под ногами, смотрит куда мы
+  // свой верблюд — под ногами, смотрит куда мы. Убитый — седок на земле, труп остаётся где был.
   if (ride.camel >= 0) {
-    const speed = havePrev ? Math.min(_prev.distanceTo(player.pos) / dt, 60) : 0;
-    placeCamel(camels[ride.camel], _d, player.forward, speed, dt);
-    ride.hint = `На верблюде №${ride.camel + 1}  ·  E — слезть`;
+    if (stateOf(camels[ride.camel]).away === 'dead') noteCamelDead(ride.camel);
+    else {
+      const speed = havePrev ? Math.min(_prev.distanceTo(player.pos) / dt, 60) : 0;
+      placeCamel(camels[ride.camel], _d, player.forward, speed, dt);
+      ride.hint = `На верблюде №${ride.camel + 1}  ·  E — слезть`;
+    }
   }
   _prev.copy(player.pos); havePrev = true;
 
@@ -143,6 +165,7 @@ export function updateRide(dt) {
     const ci = r.last && r.last.c;
     if (!Number.isInteger(ci) || !r.pos || !camels[ci]) continue;
     const c = camels[ci], st = stateOf(c);
+    if (st.away === 'dead') continue;
     if (st.rider !== r.id) claimed(ci, r.id);
     if (st.rider !== r.id) continue;                    // конфликт решился в нашу пользу
     st.seen = now;

@@ -31,7 +31,7 @@
 | `ambience.js` | Птицы, звери, листва; хиджаз, дарбука, кухня; `updateAmbience()`. | `updateAmbience` |
 | `steps.js` | Шаги: каденс по пройденному пути (снаружи — `player.pos`, в доме — `house.active.pos`), покрытие (биом, мостовая города, дерево балкона/дома), синтез в `audio.selfBus`, `P.STEPS`. | `updateSteps` |
 | `caravan.js` | Верблюды и погонщики, `buildCaravan()`, детерминированная симуляция по мировому времени (`worldT0`, `stepCaravan`), `updateCaravan()`. В комнате не догоняет время, пока `releaseCaravan` (узнали, жив ли караван). `haltAt` — отметка остановки, дальше неё шаг не идёт; `camelSlotDir(i)` — где место верблюда `i`. Сеть: поле `t0` в `hello`. | `caravan, buildCaravan, updateCaravan, camelSlotDir, worldTime, haltCaravan, releaseCaravan, worldT0 (live)` |
-| `npc.js` | Жители (по одному на дом) и погонщики: бродят, житель иногда выходит на улицы, погонщик иногда отходит от каравана. 5 стрел снаружи — труп до конца сессии. Все погонщики мертвы — `haltCaravan(worldTime())`. Хозяин как у монстра; сеть: `npc`, `nhit`, `npc` в `hello`. | `NPC_HP, isNpcHost, buildNpc, updateNpc, npcSummary, debugNpcHit, debugNpcOut` |
+| `npc.js` | Жители (по одному на дом), погонщики и верблюды: люди бродят, верблюды идут в цепочке. 5 стрел снаружи — труп до конца сессии, стрела остаётся в теле. Все погонщики мертвы — `haltCaravan(worldTime())`. Мёртвый верблюд выпадает из цепочки и сбрасывает седока. Хозяин как у монстра; сеть: `npc`, `nhit`, `npc` в `hello`. | `NPC_HP, isNpcHost, buildNpc, updateNpc, npcSummary, debugNpcHit, debugNpcOut` |
 | `ride.js` | Верблюд под седлом: приручение (полоска, `P.TAME_T`), посадка (`player.rideH`, `player.speedBonus = P.RIDE_BONUS`), E — слезть, бег верблюда обратно в цепочку, чужие седоки; сеть: `camel` {ride/back}, поле `c` в `pos`, `camel` в `hello`. Переставляет верблюдов, ушедших из цепочки, **после** `updateCaravan` и `updateNet`. `forceDismount()` — ссадить (гибель игрока). | `ride {camel, target, progress, hint}, camelRider, updateRide, forceDismount` |
 | `net.js` | PeerJS: слоты, mesh-соединения, аватары чужих игроков, `pos` 12 Гц. **Шина протокола**: `onNet(type, fn)`, `addHelloFields(fn)`, `addPosFields(fn)`, `onNetChange(fn)`. Игровой логики не знает. У каждого remote хранится последний `pos` целиком (`r.last`) — для полей других модулей. | `net, netStart, netBroadcast, netStatus, sendHello, onNet, addHelloFields, addPosFields, onNetChange, updateNet, slotId, slotOf` |
 | `roomsync.js` | Владелец комнаты и общие параметры: `isOwner`, `publishRoomParams`, приём `params`/`hello.room`, хук `onRoomChange`. | `isOwner, ownerName, publishRoomParams, onRoomChange` |
@@ -50,7 +50,7 @@ flowchart TD
   steps --> house & player & audio & world & params & state
   ui --> oasis & voice & roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
   debug --> ui & oasis & voice & monster & health & npc & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
-  npc --> bow & caravan & house & net & player & town & terrain & world & scene & params & state
+  npc --> bow & caravan & house & ride & net & player & town & terrain & world & scene & params & state
   voice --> house & net & audio & params & state
   monster --> health & bow & caravan & net & audio & terrain & world & fow & scene & params & state
   health --> player & ride & net & audio & params & state
@@ -261,8 +261,12 @@ renderer.render(player.inside ? houseScene : scene, camera)
   Погонщик обычно при караване (синус вдоль цепочки, как раньше) и время от времени отходит на 4–6 м, стоит и
   возвращается. В чужие дома погонщики не заходят. Состояние «идти за игроком» зарезервировано и не сделано.
 - **Стрелы.** 5 попаданий, каждое снимает 1, в голову не удваивается. Стрелять можно только снаружи: житель в доме
-  для стрелы не существует (лук в доме и так не стреляет). Погонщик снаружи всегда. Труп остаётся до конца сессии,
-  заново никто не появляется. В ответ не бьют.
+  для стрелы не существует (лук в доме и так не стреляет). Погонщик и верблюд снаружи всегда. Попавшая стрела
+  втыкается в тело (`mesh.attach`, как у медведракона) и дальше едет вместе с ним, в том числе когда труп заваливается.
+  Труп остаётся до конца сессии, заново никто не появляется. В ответ не бьют.
+- **Верблюды.** Те же 5 стрел. Мёртвый выпадает из цепочки и лежит там, где его настигли; остальные идут дальше,
+  караван из-за этого не останавливается. Если на нём сидели, седок оказывается на земле (`noteCamelDead`:
+  `st.away = 'dead'`, посадка и возврат в цепочку для этого верблюда больше не происходят). id в снимке — `200 + i`.
 - **Караван встаёт.** Когда мертвы все погонщики, хозяин один раз ставит `haltAt = worldTime()`. Дальше
   `updateCaravan` не шагает. `P.CAMEL_SPEED` не трогаем: верблюд, которого уже увели из цепочки, едет как ехал.
   Отметка уходит в снимке и в `hello`, поэтому опоздавший останавливается в той же точке. Пока отметка неизвестна,
@@ -270,8 +274,8 @@ renderer.render(player.inside ? houseScene : scene, camera)
   младший слот отпускает его, через 12 с — предохранитель, если снимок так и не пришёл.
 - **Хозяин.** Тот же приём, что у медведракона, отдельный флаг: не симулируем, пока не приняли снимок или не пробыли
   6 с младшим слотом / в одиночестве. Снимок `npc` ~10 Гц: `{halt, a: [[id, hp, st, ...]]}`. `id` дома — номер дома,
-  погонщика — `100 + i`. Погонщик при караване координаты не шлёт (их и так даёт мировое время). Попадание своей
-  стрелы хозяин применяет сразу, остальные шлют `nhit`.
+  погонщика — `100 + i`, верблюда — `200 + i`. Погонщик при караване и живой верблюд координаты не шлют (их и так
+  даёт мировое время). Попадание своей стрелы хозяин применяет сразу, остальные шлют `nhit`.
 
 ## Голос (`voice.js`)
 
