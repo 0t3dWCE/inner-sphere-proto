@@ -6,6 +6,7 @@ import { renderer } from './scene.js';
 import { clearExplored, exploredPct, fowUniforms } from './fow.js';
 import { applyRadius } from './terrain.js';
 import { townDir, BIOME_NAME } from './world.js';
+import { oasisDir } from './oasis.js';
 import { plaques } from './messages.js';
 import { caravan } from './caravan.js';
 import { initAudio } from './audio.js';
@@ -174,5 +175,6 @@ export function updateHud(fowOn) {
     (fowOn ? `  |  разведано: ${exploredPct.toFixed(1)}%` : '') +
     `  |  караван: ${(caravan.dir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
     `  |  город: ${(townDir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
+    `  |  оазис: ${(oasisDir.angleTo(fowUniforms.uPlayerDir.value) * P.R).toFixed(0)} м` +
     `  |  под ногами: ${BIOME_NAME[biome]} (${groundH >= 0 ? '+' : ''}${groundH.toFixed(1)} м)`;
 }

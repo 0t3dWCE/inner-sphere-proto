@@ -11,6 +11,7 @@ import { P } from './params.js';
 import { scene } from './scene.js';
 import { fogify } from './fow.js';
 import { townDir, TOWN_AVOID, lakeDir, LAKE_R } from './world.js';
+import { oasisDir, OASIS_AVOID } from './oasis.js';
 import { surfaceR } from './terrain.js';
 import { palette } from './props.js';
 import { audio, onAudioReady, sfxBell, sfxThud, sfxGrunt } from './audio.js';
@@ -233,6 +234,7 @@ function stepCaravan(dt) {
     };
     bounce(townDir, TOWN_AVOID);
     bounce(lakeDir, (LAKE_R + 0.06) * R);
+    bounce(oasisDir, OASIS_AVOID);
     cv.s += ang;
     cv.travelled += ang;
     const last = cv.trail[cv.trail.length - 1];

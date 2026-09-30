@@ -17,10 +17,11 @@
 | `terrain.js` | Рельеф `terrainH/surfaceR`, геометрия стенки и воды, плитка × карта биомов, `paintBiomes()`, `applyRadius()` и реестр `radiusListeners`. | `terrainH, surfaceR, paintBiomes, applyRadius, radiusListeners, sphere, water` |
 | `sky.js` | Сфера-атмосфера с облаками и солнцем, `updateSky()`. | `sky, updateSky` |
 | `props.js` | Реестр объектов на стенке (`addProp/placeOnWall`), палитра, `buildProps()` — цветные коробки и маяки. | `props, addProp, placeOnWall, palette, buildProps` |
+| `oasis.js` | Оазис в пустыне: место своим RNG от seed'а (`rand()` мира не тратит), 3–5 пальм, открытая палатка (ковёр, кальян), лужа и колодец, привязь. Пропсы с поляны переставляет. `oasisBlocks` — круги коллизий. | `oasisDir, oasisBlocks, OASIS_AVOID, buildOasis` |
 | `forest.js` | Ёлки инстансами: `buildForest()`, `placeTrees()`, массив `trees` для коллизий. | `trees, buildForest, placeTrees` |
 | `town.js` | Дома, стена, ворота, башни: `buildTown()`, AABB-препятствия; метаданные домов `houses[]` (размеры, поворот, дверь, балконы) и площадки балконов `townPlatforms[]`, на которых можно стоять. | `townObstacles, houses, townPlatforms, buildTown, houseLocalToTown, houseDoorNear, townPlatformAt` |
 | `house.js` | Интерьеры: отдельная сцена `houseScene` с плоским полом, генератор дома из seed+номер (этажи, лестница, перегородки, мебель, обои, «особенность»), контроллер ходьбы внутри (перехватывает управление через `setPlayerOverride`), вход/выход через дверь и балконы (`onSpace`). | `houseScene, house {active, hint}, updateHouse, debugEnter, debugExit` |
-| `player.js` | Ввод (клавиатура, мышь), ходьба, прыжок, коллизии с городом и ёлками, удержание на рельефе и на балконных площадках, камера. Пишет `state.player`. Точки расширения: `onSpace(fn)` — перехват пробела, `setPlayerOverride({update, mouse, jump})` — отдать управление другому контроллеру. | `updatePlayer, setPitch, onSpace, setPlayerOverride, keys, townXZ, nearTown, platform` |
+| `player.js` | Ввод (клавиатура, мышь), ходьба, прыжок, коллизии с городом, ёлками и оазисом, удержание на рельефе и на балконных площадках, камера. Пишет `state.player`. Точки расширения: `onSpace(fn)` — перехват пробела, `setPlayerOverride({update, mouse, jump})` — отдать управление другому контроллеру. | `updatePlayer, setPitch, onSpace, setPlayerOverride, keys, townXZ, nearTown, platform` |
 | `messages.js` | Шары-сообщения и таблички (G-Set), форма чата, бросок по клику, сеть: `ball`, `plaque`, поле `plaques` в `hello`. `holding()` — шар в руке (тогда клик бросает, а не стреляет). | `plaques, holding, loadPlaques, updateMessages` |
 | `bow.js` | Лук в лесу (место из seed'а, свой RNG), подбор вплотную (запоминается в localStorage комнаты), лук в руке (ребёнок камеры), стрелы: клик без шара → полёт по дуге (`P.ARROW_SPEED`, `P.GRAVITY`), след, втыкание в землю (остаются, FIFO 300); сеть: `arrow {p, v, color}`. Хук `onArrowHit(fn(from, to, arrow))` — проверка попадания по отрезку полёта за кадр (`true` — стрела поглощена). | `bow {have, hint, dir}, arrows, buildBow, updateBow, onArrowHit` |
 | `health.js` | HP игрока (100), урон `damagePlayer`, лечение 8 HP/с после 6 с без урона, смерть (управление замирает через `setPlayerOverride`, верблюд отпускается) и через 4 с возрождение на старте; полоска `#hp`, вспышка `#hurt`, экран `#dead`; флаг `dd` в `pos`. | `HP_MAX, health, damagePlayer, updateHealth` |
@@ -44,10 +45,10 @@
 
 ```mermaid
 flowchart TD
-  main --> ui & debug & voice & monster & health & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & sky & terrain & ambience & steps
+  main --> ui & debug & voice & monster & health & caravan & messages & bow & net & roomsync & house & ride & player & town & forest & props & oasis & sky & terrain & ambience & steps
   steps --> house & player & audio & world & params & state
-  ui --> voice & roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
-  debug --> ui & voice & monster & health & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
+  ui --> oasis & voice & roomsync & net & caravan & messages & house & ride & bow & audio & terrain & fow & world & params & state
+  debug --> ui & oasis & voice & monster & health & roomsync & net & caravan & audio & house & ride & bow & player & forest & town & terrain & world & params & state
   voice --> house & net & audio & params & state
   monster --> health & bow & caravan & net & audio & terrain & world & fow & scene & params & state
   health --> player & ride & net & audio & params & state
@@ -55,15 +56,16 @@ flowchart TD
   ride --> caravan & net & terrain & params & state
   bow --> messages & audio & net & forest & terrain & world & fow & scene & params & state
   roomsync --> net & terrain & params & state
-  caravan --> net & audio & props & terrain & world & fow & scene & params & state
+  caravan --> oasis & net & audio & props & terrain & world & fow & scene & params & state
   messages --> net & props & terrain & fow & scene & params & state
   ambience --> audio & fow & world & params & state
   audio --> world & scene & params
   net --> terrain & fow & scene & state
-  player --> forest & town & terrain & world & scene & params & state
+  player --> oasis & forest & town & terrain & world & scene & params & state
   town --> props & terrain & world & fow & scene & state
   forest --> terrain & world & fow & scene & state
   props --> terrain & world & fow & scene & params & state
+  oasis --> props & terrain & world & fow & scene & params & state
   sky --> fow & scene & params
   terrain --> world & fow & scene & params
   fow --> scene & params & state
@@ -113,14 +115,15 @@ flowchart TD
 2. `paintBiomes()` — карта биомов (без `rand`)
 3. `buildForest()` — ёлки
 4. `buildProps()` — цветные коробки, маяки
-5. `buildTown()` — дома, стена, ворота
-6. `applyRadius()` — геометрия стенки и воды под текущие `R`/`TERRAIN_H`, расстановка всего через `radiusListeners`
-7. `buildCaravan()` — верблюды и погонщики
-8. `buildBow()` — лук в лесу (свой RNG, `rand()` не тратит; нужны `trees`, чтобы не лечь в ствол)
-9. `loadPlaques()` — таблички комнаты из localStorage
-10. `netStart()` — занять слот PeerJS, соединиться
-11. `installDebug()` — `window.dbg` при `?debug`
-12. `tick()`
+5. `buildOasis()` — оазис (свой RNG, `rand()` не тратит; пропсы, попавшие в поляну, переставляет)
+6. `buildTown()` — дома, стена, ворота
+7. `applyRadius()` — геометрия стенки и воды под текущие `R`/`TERRAIN_H`, расстановка всего через `radiusListeners`
+8. `buildCaravan()` — верблюды и погонщики
+9. `buildBow()` — лук в лесу (свой RNG, `rand()` не тратит; нужны `trees`, чтобы не лечь в ствол)
+10. `loadPlaques()` — таблички комнаты из localStorage
+11. `netStart()` — занять слот PeerJS, соединиться
+12. `installDebug()` — `window.dbg` при `?debug`
+13. `tick()`
 
 Проверка эквивалентности после нарезки: старая (монолитная) и новая версии в одной комнате дают побитово
 одинаковые `townDir`, все 750 ёлок, 60 препятствий, параметры верблюдов и погонщиков, рельеф и биомы;
@@ -131,7 +134,7 @@ flowchart TD
 ```
 dt = min(clock.getDelta(), 0.05)
 updatePlayer(dt)         player     базис (up = −normalize(pos), forward в касательной плоскости), WASD, коллизии
-                                    с городом и ёлками, биом под ногами, прыжок, pos.setLength(R − h − EYE − jumpH),
+                                    с городом, ёлками и оазисом, биом под ногами, прыжок, pos.setLength(R − h − EYE − jumpH),
                                     прилипание к балконной площадке (townPlatformAt), камера = basis(right, up, −forward) + pitch.
                                     Если стоит override (игрок в доме) — вместо всего этого house.controller.update(dt):
                                     плоская гравитация, круг-vs-AABB, пол/лестница через groundAt, камера YXZ(pitch, yaw)

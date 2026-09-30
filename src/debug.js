@@ -16,6 +16,7 @@ import { bow, arrows } from './bow.js';
 import { monster, monsterView, isMonsterHost, debugMonsterHit } from './monster.js';
 import { health, damagePlayer } from './health.js';
 import { voice, debugVoiceTone, debugVoiceLevels } from './voice.js';
+import { oasisDir } from './oasis.js';
 import { net } from './net.js';
 import { isOwner } from './roomsync.js';
 import { setParam } from './ui.js';
@@ -29,7 +30,7 @@ export function installDebug() {
     biomeAt, BIOME, bioAxis, lakeDir, trees, terrainH, surfaceR, net, ME, ROOM, WORLD_SEED, roomState, isOwner, setParam,
     player, houses, townPlatforms, house, keys, debugEnter, debugExit, ride, bow, arrows,
     monster, monsterView, isMonsterHost, monsterHit: debugMonsterHit, health, damagePlayer,
-    voice, voiceTone: debugVoiceTone, voiceLevels: debugVoiceLevels,
+    voice, voiceTone: debugVoiceTone, voiceLevels: debugVoiceLevels, oasisDir,
     get worldT0() { return worldT0; },
     get audio() { return audio; },
     get playerBiome() { return player.biome; },
@@ -40,6 +41,14 @@ export function installDebug() {
       forward.copy(target).sub(d);
     },
     // на опушку леса: в 12 м от границы на стороне травы, лицом к центру леса
+    // встать в dist м перед входом палатки, лицом к оазису
+    goToOasis(dist = 9) {
+      const fwd = bioAxis.clone().addScaledVector(oasisDir, -bioAxis.dot(oasisDir)).normalize();
+      const p = oasisDir.clone().multiplyScalar(Math.cos(dist / P.R)).addScaledVector(fwd, Math.sin(dist / P.R)).normalize();
+      pos.copy(p).multiplyScalar(P.R - P.EYE);
+      forward.copy(oasisDir).sub(p);
+      player.jumpH = 0; player.jumpV = 0;
+    },
     goToForest() {
       const d = bioE1.clone().multiplyScalar(Math.cos(BAND - 12 / P.R)).addScaledVector(bioAxis, Math.sin(BAND - 12 / P.R)).normalize();
       this.goTo(d, bioAxis);

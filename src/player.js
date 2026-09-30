@@ -1,4 +1,4 @@
-// Игрок: ввод (клавиатура, мышь), ходьба по касательной, прыжок, коллизии с городом и ёлками,
+// Игрок: ввод (клавиатура, мышь), ходьба по касательной, прыжок, коллизии с городом, ёлками и оазисом,
 // удержание на поверхности рельефа и установка камеры. Всё состояние — в state.player.
 import * as THREE from 'three';
 import { player, START_DIR } from './state.js';
@@ -8,6 +8,7 @@ import { townDir, dirToTown, townToDir, TOWN_H, BIOME, biomeAt } from './world.j
 import { terrainH } from './terrain.js';
 import { townObstacles, townPlatformAt } from './town.js';
 import { trees } from './forest.js';
+import { oasisBlocks } from './oasis.js';
 
 const { pos, forward } = player;
 pos.copy(START_DIR).multiplyScalar(P.R - P.EYE);   // стартуем на "экваторе" (вдали от полюсов UV-сетки)
@@ -70,6 +71,22 @@ function collideWithTrees() {
     pos.copy(_pd).multiplyScalar(len);
   }
 }
+// стволы пальм, колодец, столбы привязи — те же круги по дуге
+function collideWithOasis() {
+  _pd.copy(pos).normalize();
+  const R = P.R, len = pos.length();
+  for (const b of oasisBlocks) {
+    const minA = (PLAYER_RAD + b.rad) / R;
+    const cosA = _pd.dot(b.dir);
+    if (cosA < Math.cos(minA)) continue;
+    const a = Math.acos(Math.min(1, cosA));
+    _tc.copy(_pd).addScaledVector(b.dir, -cosA);
+    if (_tc.lengthSq() < 1e-12) _tc.copy(forward);
+    _tc.normalize();
+    _pd.addScaledVector(_tc, minA - a).normalize();
+    pos.copy(_pd).multiplyScalar(len);
+  }
+}
 
 // ---------- ввод ----------
 const isTyping = e => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
@@ -118,6 +135,7 @@ export function updatePlayer(dt) {
   if (_move.lengthSq() > 0) pos.addScaledVector(_move.normalize(), (P.SPEED + player.speedBonus) * dt * (player.biome === BIOME.WATER ? 0.45 : 1));
   collideWithTown();
   collideWithTrees();
+  collideWithOasis();
   player.biome = biomeAt(_pd.copy(pos).normalize());
   // координаты в системе города и площадка под ногами (балкон)
   nearTown = _pd.angleTo(townDir) * P.R < TOWN_H * 1.6;

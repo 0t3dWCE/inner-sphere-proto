@@ -11,6 +11,7 @@ import './world.js';                                       // townDir — пер
 import { paintBiomes, applyRadius } from './terrain.js';
 import { updateSky } from './sky.js';
 import { buildProps } from './props.js';
+import { buildOasis } from './oasis.js';
 import { buildForest } from './forest.js';
 import { buildTown } from './town.js';
 import { updatePlayer } from './player.js';
@@ -33,6 +34,7 @@ import { installDebug } from './debug.js';
 paintBiomes();      // карта биомов (без rand)
 buildForest();      // ёлки
 buildProps();       // цветные коробки и маяки
+buildOasis();       // оазис в пустыне (свой RNG; пропсы с поляны переставляет)
 buildTown();        // дома, стена, ворота
 applyRadius();      // геометрия стенки/воды под текущие R и TERRAIN_H, расстановка всего на поверхности
 buildCaravan();     // верблюды и погонщики
