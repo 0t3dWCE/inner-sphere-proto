@@ -199,6 +199,11 @@ function simIndoor(n, dt) {
   n.moving = Math.hypot(n.pos.x - ox, n.pos.z - oz) > 0.004;
 }
 function simStreet(n, dt) {
+  if (n.mode === 'camp') {
+    n.moving = false;
+    if (oasisDir.lengthSq() > 0.5) n.face.copy(oasisDir);
+    return;
+  }
   if (n.mode !== 'home') {
     n.outLeft -= dt;
     if (n.outLeft <= 0) {
@@ -492,6 +497,7 @@ export function buildNpc() {
     actors.push(n);
     homeNpcs.push(n);
   }
+  placeNearOasis(homeNpcs[0]);
   caravan.herders.forEach((h, i) => {
     h.st = 'in';
     h.hp = NPC_HP;
@@ -513,6 +519,19 @@ export function buildNpc() {
   });
 }
 
+function placeNearOasis(n) {
+  if (!n || oasisDir.lengthSq() < 0.5) return;
+  _fwd.copy(bioAxis).addScaledVector(oasisDir, -oasisDir.dot(bioAxis));
+  if (_fwd.lengthSq() < 1e-6) _fwd.set(1, 0, 0);
+  _fwd.normalize();
+  const gap = 14 / P.R;
+  n.dir.copy(oasisDir).multiplyScalar(Math.cos(gap)).addScaledVector(_fwd, Math.sin(gap)).normalize();
+  n.face.copy(oasisDir);
+  n.st = 'out';
+  n.mode = 'camp';
+  n.anchor = 'oasis';
+  n.moving = false;
+}
 function doorTown(n, extra) {
   const h = houses[n.house];
   houseLocalToTown(h, h.doorX, h.d / 2 + extra, _v2);
@@ -668,10 +687,16 @@ function applyOrder(n, where) {
   if (where === 'stop') {
     n.order = null;
     if (n.kind === 'home' && n.st === 'out') {
-      n.mode = 'street';
-      n.outLeft = 8;
-      n.goalTown = streetPoint();
-      n.goalT = 0;
+      if (n.anchor === 'oasis') {
+        n.mode = 'camp';
+        n.moving = false;
+        n.goalTown = null;
+      } else {
+        n.mode = 'street';
+        n.outLeft = 8;
+        n.goalTown = streetPoint();
+        n.goalT = 0;
+      }
     }
     if (n.kind === 'herder' && n.st === 'out') { n.phase = 'back'; n.backT = 0; }
     return true;
@@ -774,6 +799,8 @@ export function talkSnapshot(maxM) {
     const arcM = Math.round(_talkMe.angleTo(_talkAt.normalize()) * P.R * 10) / 10;
     if (arcM > maxM) continue;
     const resident = n.kind === 'home';
+    const atOasis = resident && n.dir.lengthSq() > 0.5 && oasisDir.lengthSq() > 0.5
+      && n.dir.angleTo(oasisDir) * P.R < 24;
     out.push({
       id: n.id,
       kind: resident ? 'resident' : 'herder',
@@ -781,7 +808,7 @@ export function talkSnapshot(maxM) {
       hp: n.hp,
       st: n.st,
       arcM,
-      place: withOrder(n, resident ? 'на улице' : 'у каравана'),
+      place: withOrder(n, atOasis ? 'у оазиса' : (resident ? 'на улице' : 'у каравана')),
     });
   }
   return out;

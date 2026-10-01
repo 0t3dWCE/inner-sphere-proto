@@ -6,7 +6,7 @@ import re
 import socket
 import threading
 import time
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 from mcp import ClientSession
@@ -47,7 +47,7 @@ server = MCPServer("inner-sphere", log_level="WARNING")
 
 @server.tool()
 def say(text: str, target: str = "player") -> str:
-    """Короткая реплика текущего персонажа по-русски. target: player, all или id актёра в комнате."""
+    """Короткая реплика текущего персонажа по-русски. Каждую реплику произноси этим инструментом, не обычным текстом. target: player, all или id актёра в комнате."""
     if "say" not in slot.allowed:
         return "rejected: инструменту say этот персонаж не обучен"
     if slot._said:
@@ -88,8 +88,8 @@ _GO = {"follow", "home", "out", "stop", "here", "door", "town", "oasis", "forest
 
 
 @server.tool()
-def go(where: str) -> str:
-    """Куда идти и где стоять. here — стой на месте. door — стой у своей двери. town — центр города. oasis — оазис. forest — опушка леса. lake — берег озера. follow — за игроком. home — домой или к каравану. out — то же, что door. stop — отменить и жить как раньше. Дойдя, стоит, пока не будет нового приказа."""
+def go(where: Literal["here", "follow", "home", "door", "town", "oasis", "forest", "lake", "out", "stop"]) -> str:
+    """Куда идти и где стоять. Вызывай только если просят идти или стоять, иначе не вызывай. here — стой где стоишь (постой, стой тут, останься, подожди). door — стой у своей двери. town — центр города. oasis — оазис. forest — опушка леса. lake — берег озера. follow — за игроком. home — домой или к каравану. out — то же, что door. stop — только если отпускают к своим делам, не когда просят стоять. Дойдя, стоит, пока не будет нового приказа."""
     if "go" not in slot.allowed:
         return "rejected: инструменту go этот персонаж не обучен"
     place = str(where or "").strip()
@@ -173,6 +173,8 @@ def _plain_schema(raw: dict) -> dict:
         prop = {"type": spec.get("type", "string")}
         if spec.get("description"):
             prop["description"] = spec["description"]
+        if spec.get("enum"):
+            prop["enum"] = list(spec["enum"])
         props[key] = prop
     return {
         "type": "object",
