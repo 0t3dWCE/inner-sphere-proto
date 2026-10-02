@@ -9,6 +9,7 @@ import { surfaceR, radiusListeners } from './terrain.js';
 import { BIOME, biomeAt } from './world.js';
 
 const TREE_N = 750;
+const TREE_SPARE = 24;   // запас, куда Мастер сажает ёлки вокруг игрока
 export const trees = [];   // { dir, h, yaw } — читает player.js (коллизии со стволами)
 let trunkIM, tierIM;
 const TIERS = [[0.18, 0.42, 0.27], [0.40, 0.38, 0.21], [0.62, 0.38, 0.15]];   // [низ, высота, радиус] в долях h
@@ -25,8 +26,10 @@ export function buildForest() {
   const tierGeo = new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0);
   const trunkMat = fogify(new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 1, flatShading: true }));
   const tierMat = fogify(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .9, flatShading: true }));
-  trunkIM = new THREE.InstancedMesh(trunkGeo, trunkMat, trees.length);
-  tierIM = new THREE.InstancedMesh(tierGeo, tierMat, trees.length * 3);
+  trunkIM = new THREE.InstancedMesh(trunkGeo, trunkMat, trees.length + TREE_SPARE);
+  tierIM = new THREE.InstancedMesh(tierGeo, tierMat, (trees.length + TREE_SPARE) * 3);
+  trunkIM.count = trees.length;
+  tierIM.count = trees.length * 3;
   trunkIM.frustumCulled = tierIM.frustumCulled = false;
   scene.add(trunkIM, tierIM);
   const c = new THREE.Color();
@@ -54,5 +57,17 @@ export function placeTrees() {
   });
   trunkIM.instanceMatrix.needsUpdate = true;
   tierIM.instanceMatrix.needsUpdate = true;
+  trunkIM.count = trees.length;
+  tierIM.count = trees.length * 3;
+}
+export function plantTree(dir) {
+  if (!trunkIM || trees.length >= trunkIM.instanceMatrix.count) return false;
+  const i = trees.length;
+  trees.push({ dir: dir.clone().normalize(), h: 5 + Math.random() * 4, yaw: Math.random() * Math.PI * 2 });
+  const c = new THREE.Color().setHSL(0.33, 0.5, 0.28);
+  for (let k = 0; k < 3; k++) tierIM.setColorAt(i * 3 + k, c);
+  tierIM.instanceColor.needsUpdate = true;
+  placeTrees();
+  return true;
 }
 radiusListeners.push(placeTrees);

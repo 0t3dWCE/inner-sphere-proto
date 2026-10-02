@@ -119,6 +119,24 @@ function put(obj, x, z, yaw = 0) {
 function block(x, z, rad) { oasisBlocks.push({ x, z, rad, dir: offsetDir(x, z, new THREE.Vector3()) }); }
 radiusListeners.push(seatAll);
 
+const plantedPalms = [];
+const PALM_MAX = 24;
+function seatPalm(mesh, dir) {
+  mesh.position.copy(dir).multiplyScalar(surfaceR(dir));
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().negate());
+}
+export function plantPalm(dir) {
+  if (plantedPalms.length >= PALM_MAX) return false;
+  const d = dir.clone().normalize();
+  const g = makePalm(6 + Math.random() * 4);
+  seatPalm(g, d);
+  scene.add(g);
+  oasisBlocks.push({ dir: d, rad: 0.45 });
+  plantedPalms.push({ mesh: g, dir: d });
+  return true;
+}
+radiusListeners.push(() => { for (const p of plantedPalms) seatPalm(p.mesh, p.dir); });
+
 // ---------- модели: локальный +Y вверх, земля — y = 0 ----------
 function makePalm(h) {
   const g = new THREE.Group();

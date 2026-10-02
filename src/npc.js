@@ -305,6 +305,7 @@ function markDead(n) {
   n.st = 'dead';
   n.moving = false;
   n.order = null;
+  endAct(n);
   if (n.kind === 'herder') maybeHalt();
 }
 function applyHit(n, k) {
@@ -408,6 +409,90 @@ function placeOnWall(mesh, dir, face) {
   mesh.position.copy(dir).multiplyScalar(surfaceR(dir) - 0.02);
   mesh.quaternion.setFromRotationMatrix(_m.makeBasis(_right, _up, _fwd));
 }
+function rigOf(n) {
+  return n.kind === 'herder' ? n.herder : n.parts;
+}
+function restY(mesh) {
+  if (mesh.userData.restY == null) mesh.userData.restY = mesh.position.y;
+  return mesh.userData.restY;
+}
+function resetRig(p) {
+  if (!p || !p.legL) return;
+  for (const m of [p.legL, p.legR, p.armL, p.armR, p.head, p.body]) {
+    if (m) m.rotation.set(0, 0, 0);
+  }
+  if (p.body) p.body.position.y = restY(p.body);
+  if (p.head) p.head.position.y = restY(p.head);
+}
+function endAct(n) {
+  if (!n || !n.act) return;
+  resetRig(rigOf(n));
+  n.act = null;
+  n.hop = 0;
+  n.hopV = 0;
+  if (n.herder) {
+    n.herder.acting = false;
+    n.herder.hop = 0;
+    n.herder.actBase = null;
+  }
+}
+function beginAct(n, what) {
+  if (what !== 'sing' && what !== 'dance' && what !== 'jump' && what !== 'sit') return false;
+  if (n.act) resetRig(rigOf(n));
+  n.act = what;
+  n.hop = 0;
+  n.hopV = what === 'jump' ? 5.4 : 0;
+  n.actUntil = clock.elapsedTime + (what === 'sing' ? 8 : what === 'dance' ? 6 : what === 'sit' ? 12 : 2);
+  if (n.herder) {
+    n.herder.acting = n.st === 'in';
+    n.herder.hop = 0;
+    n.herder.actBase = n.st === 'in' ? n.herder.group.position.clone() : null;
+  }
+  return true;
+}
+function tickAct(n, dt) {
+  if (!n.act) return false;
+  n.moving = false;
+  if (n.act === 'jump') {
+    n.hopV -= 18 * dt;
+    n.hop = Math.max(0, n.hop + n.hopV * dt);
+    if (n.herder) n.herder.hop = n.hop;
+    if (n.hop === 0 && n.hopV < 0) endAct(n);
+    return !!n.act;
+  }
+  if (clock.elapsedTime >= n.actUntil) endAct(n);
+  return !!n.act;
+}
+function pose(n) {
+  const p = rigOf(n);
+  if (!p || !p.legL || !n.act || n.act === 'jump') return;
+  const ph = clock.elapsedTime * 6.5 + (typeof n.phase === 'number' ? n.phase : (n.herder && n.herder.gaitPhase) || 0);
+  if (n.act === 'sit') {
+    p.legL.rotation.x = 1.35;
+    p.legR.rotation.x = 1.35;
+    p.armL.rotation.x = 0.45;
+    p.armR.rotation.x = 0.4;
+    p.body.position.y = restY(p.body) - 0.36;
+    p.head.position.y = restY(p.head) - 0.36;
+    return;
+  }
+  if (n.act === 'dance') {
+    p.legL.rotation.x = Math.sin(ph) * 0.4;
+    p.legR.rotation.x = -Math.sin(ph) * 0.4;
+    p.armL.rotation.set(-1.15 + Math.sin(ph) * 0.45, 0, 0.55);
+    p.armR.rotation.set(-1.15 + Math.sin(ph + 1.2) * 0.45, 0, -0.55);
+    p.body.rotation.y = Math.sin(ph * 0.5) * 0.45;
+    p.head.rotation.z = Math.sin(ph) * 0.18;
+    return;
+  }
+  p.armL.rotation.x = -0.55;
+  p.armR.rotation.x = -0.25 + Math.sin(ph * 0.45) * 0.2;
+  p.body.rotation.y = Math.sin(ph * 0.35) * 0.14;
+  p.head.rotation.x = Math.sin(ph) * 0.08;
+}
+function liftOffWall(mesh, dir, hop) {
+  if (hop > 0) mesh.position.addScaledVector(dir, -hop);
+}
 function gait(parts, moving, phase, dead) {
   if (!parts) return;
   if (dead) {
@@ -451,29 +536,43 @@ function showActor(n) {
     return;
   }
   if (n.kind === 'herder') {
-    if (n.st === 'in') return;
+    if (n.st === 'in') {
+      if (!n.act) return;
+      const g = n.herder.group;
+      if (n.herder.actBase) {
+        g.position.copy(n.herder.actBase);
+        liftOffWall(g, n.herder.actBase.clone().normalize(), n.hop || 0);
+      }
+      pose(n);
+      return;
+    }
     if (n.dir.lengthSq() < 0.5) return;
     attach(n.mesh, scene);
     n.mesh.visible = true;
     placeOnWall(n.mesh, n.dir, n.face);
+    liftOffWall(n.mesh, n.dir, n.hop || 0);
     if (n.st === 'dead') n.mesh.rotateZ(Math.PI / 2);
-    gait(n.herder, n.moving, n.herder.gaitPhase || 0, n.st === 'dead');
+    if (n.act && n.act !== 'jump') pose(n);
+    else gait(n.herder, n.moving, n.herder.gaitPhase || 0, n.st === 'dead');
     return;
   }
   if (n.st === 'in') {
     attach(n.mesh, n.it.group);
     n.mesh.visible = !!(player.inside && player.inside.house === n.house);
-    n.mesh.position.set(n.pos.x, n.pos.y, n.pos.z);
+    n.mesh.position.set(n.pos.x, n.pos.y + (n.hop || 0), n.pos.z);
     n.mesh.rotation.set(0, n.yaw, 0);
-    gait(n.parts, n.moving, n.phase, false);
+    if (n.act && n.act !== 'jump') pose(n);
+    else gait(n.parts, n.moving, n.phase, false);
     return;
   }
   attach(n.mesh, scene);
   n.mesh.visible = n.dir.lengthSq() > 0.5;
   if (!n.mesh.visible) return;
   placeOnWall(n.mesh, n.dir, n.face);
+  liftOffWall(n.mesh, n.dir, n.hop || 0);
   if (n.st === 'dead') n.mesh.rotateZ(Math.PI / 2);
-  gait(n.parts, n.moving, n.phase, n.st === 'dead');
+  if (n.act && n.act !== 'jump') pose(n);
+  else gait(n.parts, n.moving, n.phase, n.st === 'dead');
 }
 
 export function buildNpc() {
@@ -718,20 +817,35 @@ export function npcOrder(id, where) {
   return applyOrder(n, where);
 }
 
+export function npcAct(id, what) {
+  const n = byId(id);
+  if (!n || n.st === 'dead' || (n.kind !== 'home' && n.kind !== 'herder')) return false;
+  if (!beginAct(n, what)) return false;
+  netBroadcast({ t: 'nact', id, what });
+  return true;
+}
+
 export function updateNpc(dt) {
   if (dt <= 0 || !actors.length) return;
   considerSync();
   const host = isNpcHost();
   if (host) {
-    for (const n of homeNpcs) if (n.st !== 'dead') (n.order ? simHomeOrder(n, dt) : (n.st === 'out' ? simStreet(n, dt) : simIndoor(n, dt)));
-    for (const n of herderNpcs) if (n.st !== 'dead') (n.order ? simHerderOrder(n, dt) : simHerder(n, dt));
+    for (const n of homeNpcs) if (n.st !== 'dead') {
+      if (!tickAct(n, dt)) (n.order ? simHomeOrder(n, dt) : (n.st === 'out' ? simStreet(n, dt) : simIndoor(n, dt)));
+    }
+    for (const n of herderNpcs) if (n.st !== 'dead') {
+      if (!tickAct(n, dt)) (n.order ? simHerderOrder(n, dt) : simHerder(n, dt));
+    }
     snapAcc += dt;
     if (ROOM && synced && snapAcc >= SNAP_DT && net.conns.size) {
       snapAcc = 0;
       netBroadcast(Object.assign({ t: 'npc' }, snapshot()));
     }
   } else {
-    for (const n of actors) blendRemote(n, dt);
+    for (const n of actors) {
+      if (n.st !== 'dead') tickAct(n, dt);
+      blendRemote(n, dt);
+    }
   }
   for (const n of actors) showActor(n);
 }
@@ -759,6 +873,10 @@ onNet('norder', h => {
   if (!isNpcHost()) return;
   const n = byId(h.id);
   if (n) applyOrder(n, h.where);
+});
+onNet('nact', h => {
+  const n = byId(h.id);
+  if (n) beginAct(n, h.what);
 });
 addHelloFields(() => (synced ? { npc: snapshot() } : {}));
 

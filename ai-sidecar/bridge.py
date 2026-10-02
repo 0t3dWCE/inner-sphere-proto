@@ -80,6 +80,12 @@ def _app(queue) -> Starlette:
                         payload["wav"] = _b64(line["wav"])
                     if line.get("order"):
                         payload["order"] = line["order"]
+                    if line.get("act"):
+                        payload["act"] = line["act"]
+                    if line.get("tunes"):
+                        payload["tunes"] = line["tunes"]
+                    if line.get("plants"):
+                        payload["plants"] = line["plants"]
                     if line.get("emote"):
                         payload["emote"] = line["emote"]
                     await ws.send_json(payload)
@@ -99,7 +105,7 @@ def _hear(queue, msg: dict):
         raw = base64.b64decode(wav)
         path = Path(queue.out_dir) / f"in-{time.time_ns()}.wav"
         path.write_bytes(raw)
-    return queue.hear(text=text, wav_path=str(path) if path else None, room=room)
+    return queue.hear(text=text, wav_path=str(path) if path else None, room=room, params=msg.get("params") or None)
 
 
 def _b64(path: str) -> str:

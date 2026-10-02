@@ -30,6 +30,9 @@ class Slot:
         self.said: dict | None = None
         self.emote: str | None = None
         self.order: str | None = None
+        self.act: str | None = None
+        self.tunes: list = []
+        self.plants: list = []
         self._said = False
 
     def prepare(self, allowed: set[str], room: list) -> None:
@@ -38,6 +41,9 @@ class Slot:
         self.said = None
         self.emote = None
         self.order = None
+        self.act = None
+        self.tunes = []
+        self.plants = []
         self._said = False
 
 
@@ -47,7 +53,7 @@ server = MCPServer("inner-sphere", log_level="WARNING")
 
 @server.tool()
 def say(text: str, target: str = "player") -> str:
-    """Короткая реплика текущего персонажа по-русски. Каждую реплику произноси этим инструментом, не обычным текстом. target: player, all или id актёра в комнате."""
+    """Реплика текущего персонажа по-русски. Обычно коротко. От 400 до 1000 символов только если ситуация требует длинного ответа. Медведракон — две-четыре слова. Каждую реплику произноси этим инструментом, не обычным текстом. target: player, all или id актёра в комнате."""
     if "say" not in slot.allowed:
         return "rejected: инструменту say этот персонаж не обучен"
     if slot._said:
@@ -57,12 +63,68 @@ def say(text: str, target: str = "player") -> str:
         return "rejected: пустая реплика"
     if slot.voice is None or slot.alloc_wav is None:
         return "rejected: голос ещё не поднят"
-    slot._said = True
     path = slot.alloc_wav()
-    slot.voice.speak(line, path)
+    try:
+        slot.voice.speak(line, path)
+    except Exception as exc:
+        print(f"голос: {exc}", flush=True)
+        return "rejected: голос не смог произнести реплику"
+    slot._said = True
     who = str(target or "player").strip() or "player"
     slot.said = {"text": line, "target": who, "wav": str(path)}
     return json.dumps({"ok": True, "text": line, "target": who}, ensure_ascii=False)
+
+
+_TUNE = (
+    "R", "EYE", "SPEED", "JUMP_V", "GRAVITY", "MOUSE_SENS", "THROW_SPEED", "ARROW_SPEED",
+    "FOW", "FOW_R", "FOW_MEMORY", "CAMEL_SPEED", "TAME_T", "RIDE_BONUS", "SOUND_R",
+    "VOLUME", "STEPS", "VOICE_VOL", "VOICE_R", "SKY_H", "SKY_CLOUDS", "HAZE", "AMBIENCE", "TERRAIN_H",
+)
+
+
+@server.tool()
+def tune(
+    key: Literal[
+        "R", "EYE", "SPEED", "JUMP_V", "GRAVITY", "MOUSE_SENS", "THROW_SPEED", "ARROW_SPEED",
+        "FOW", "FOW_R", "FOW_MEMORY", "CAMEL_SPEED", "TAME_T", "RIDE_BONUS", "SOUND_R",
+        "VOLUME", "STEPS", "VOICE_VOL", "VOICE_R", "SKY_H", "SKY_CLOUDS", "HAZE", "AMBIENCE", "TERRAIN_H",
+    ],
+    value: float,
+) -> str:
+    """Изменить один параметр мира, тот же, что на панели игрока. Вызывай, если просят изменить мир, или если сам решил его сдвинуть. Не на каждую реплику.
+    R радиус сферы, EYE высота глаз, SPEED скорость ходьбы, JUMP_V скорость прыжка, GRAVITY гравитация к стенке, MOUSE_SENS чувствительность мыши, THROW_SPEED скорость броска, ARROW_SPEED скорость стрелы, FOW туман войны 0 или 1, FOW_R радиус видимости, FOW_MEMORY яркость разведанного, CAMEL_SPEED скорость каравана, TAME_T секунды приручения, RIDE_BONUS прибавка скорости верблюда, SOUND_R радиус звука каравана, VOLUME громкость, STEPS громкость шагов, VOICE_VOL громкость голосов, VOICE_R до скольких метров слышно голос, SKY_H высота неба (0 — нет), SKY_CLOUDS облачность, HAZE дальность дымки, AMBIENCE звуки леса и города 0 или 1, TERRAIN_H высота холмов."""
+    if "tune" not in slot.allowed:
+        return "rejected: инструменту tune этот персонаж не обучен"
+    name = str(key or "").strip()
+    if name not in _TUNE:
+        return "rejected: нет такого параметра"
+    if len(slot.tunes) >= 4:
+        return "rejected: за ход не больше четырёх параметров"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "rejected: value должно быть числом"
+    slot.tunes.append({"key": name, "value": number})
+    return json.dumps({"ok": True, "key": name, "value": number}, ensure_ascii=False)
+
+
+@server.tool()
+def plant(what: Literal["tree", "palm"], n: int = 4) -> str:
+    """Посадить кольцом вокруг игрока. tree — ёлки, palm — пальмы. n от 1 до 6. Дома, оазис и караван не двигает."""
+    if "plant" not in slot.allowed:
+        return "rejected: инструменту plant этот персонаж не обучен"
+    kind = str(what or "").strip()
+    if kind not in ("tree", "palm"):
+        return "rejected: what — tree или palm"
+    if len(slot.plants) >= 2:
+        return "rejected: за ход не больше двух посадок"
+    try:
+        count = int(n)
+    except (TypeError, ValueError):
+        return "rejected: n должно быть числом"
+    count = max(1, min(6, count))
+    slot.plants.append({"what": kind, "n": count})
+    return json.dumps({"ok": True, "what": kind, "n": count}, ensure_ascii=False)
 
 
 _LEAD = re.compile(
@@ -81,7 +143,7 @@ def _spoken(text: str) -> str:
     line = _LEAD.sub("", line)
     line = _TAIL.sub("", line)
     line = re.split(r"[\u4e00-\u9fff]", line, maxsplit=1)[0]
-    return line.strip(" ,:")[:200]
+    return line.strip(" ,:")[:1000]
 
 
 _GO = {"follow", "home", "out", "stop", "here", "door", "town", "oasis", "forest", "lake"}
@@ -97,6 +159,21 @@ def go(where: Literal["here", "follow", "home", "door", "town", "oasis", "forest
         return "rejected: куда идти можно только follow, home, here, door, town, oasis, forest, lake, out или stop"
     slot.order = place
     return json.dumps({"ok": True, "where": place}, ensure_ascii=False)
+
+
+_DO = {"sing", "dance", "jump", "sit"}
+
+
+@server.tool()
+def do(what: Literal["sing", "dance", "jump", "sit"]) -> str:
+    """Жест на месте. Вызывай, если просят спеть, станцевать, подпрыгнуть или присесть. sing — петь стоя. dance — танец. jump — подпрыгнуть. sit — присесть. Реплика сама по себе этого не делает. Если поёт, дополнительно вызови say с коротким куплетом."""
+    if "do" not in slot.allowed:
+        return "rejected: инструменту do этот персонаж не обучен"
+    name = str(what or "").strip()
+    if name not in _DO:
+        return "rejected: жест может быть только sing, dance, jump или sit"
+    slot.act = name
+    return json.dumps({"ok": True, "what": name}, ensure_ascii=False)
 
 
 @server.tool()

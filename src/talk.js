@@ -3,12 +3,14 @@
 // M по-прежнему только голос между игроками.
 import * as THREE from 'three';
 import { player } from './state.js';
-import { P } from './params.js';
+import { P, SCHEMA } from './params.js';
 import { scene } from './scene.js';
 import { audio, initAudio } from './audio.js';
 import { net, netBroadcast, onNet } from './net.js';
-import { talkSnapshot, npcMouth, npcOrder } from './npc.js';
+import { talkSnapshot, npcMouth, npcOrder, npcAct } from './npc.js';
 import { monster } from './monster.js';
+import { setParam } from './ui.js';
+import { plantAround } from './plant.js';
 
 const URL = 'ws://127.0.0.1:8770/talk';
 const btn = document.getElementById('talk');
@@ -45,9 +47,19 @@ function connect() {
     if (m.t === 'heard') setLine('услышал: ' + m.text);
     if (m.t === 'line') {
       if (m.text) setLine(m.text);
-      if (m.order) npcOrder(m.actor, m.order);
+      if (m.order && m.actor !== 'world') npcOrder(m.actor, m.order);
+      if (m.act && m.actor !== 'world') npcAct(m.actor, m.act);
+      if (Array.isArray(m.tunes)) for (const change of m.tunes) {
+        if (change && change.key != null) setParam(change.key, change.value);
+      }
+      if (Array.isArray(m.plants)) for (const p of m.plants) {
+        if (p && (p.what === 'tree' || p.what === 'palm')) plantAround(p.what, p.n);
+      }
       if (m.wav) {
-        enqueuePlay(m.wav, lastRoom.get(m.actor));
+        const actor = m.actor === 'world'
+          ? { id: 'world', kind: 'world', st: 'out' }
+          : lastRoom.get(m.actor);
+        enqueuePlay(m.wav, actor);
         netBroadcast({ t: 'say', id: m.actor, text: m.text, wav: m.wav });
       }
     }
@@ -113,9 +125,18 @@ function stopRec() {
   recording = false;
   btn.classList.remove('on');
   const samples = chunks.reduce((n, c) => n + c.length, 0);
+  let peak = 0;
+  for (const c of chunks) for (let i = 0; i < c.length; i++) peak = Math.max(peak, Math.abs(c[i]));
   if (samples < (mic.rate / 5)) {
     chunks = [];
     setLine('слишком коротко, удерживайте кнопку');
+    btn.classList.remove('busy');
+    btn.textContent = 'говорить';
+    return;
+  }
+  if (peak < 0.04) {
+    chunks = [];
+    setLine('микрофон молчит');
     btn.classList.remove('busy');
     btn.textContent = 'говорить';
     return;
@@ -124,14 +145,10 @@ function stopRec() {
   chunks = [];
   const room = roomNow();
   lastRoom = new Map(room.map(a => [a.id, a]));
-  if (!room.length) {
-    setLine('рядом никого');
-    btn.textContent = 'говорить';
-    return;
-  }
+  const params = Object.fromEntries(SCHEMA.map(([k]) => [k, P[k]]));
   btn.classList.add('busy');
   btn.textContent = 'думает…';
-  ws.send(JSON.stringify({ t: 'hear', wav: b64(wav), room }));
+  ws.send(JSON.stringify({ t: 'hear', wav: b64(wav), room, params }));
 }
 
 function enqueuePlay(b64wav, actor) {
@@ -143,7 +160,8 @@ function playOne(b64wav, actor) {
   const bytes = Uint8Array.from(atob(b64wav), c => c.charCodeAt(0));
   const copy = bytes.buffer.slice(0);
   return audio.ctx.decodeAudioData(copy).then(buffer => new Promise(resolve => {
-    const indoor = player.inside && actor && actor.st === 'in';
+    const asWorld = actor && actor.kind === 'world';
+    const indoor = asWorld || (player.inside && actor && actor.st === 'in');
     const sound = indoor ? new THREE.Audio(audio.listener) : new THREE.PositionalAudio(audio.listener);
     sound.setBuffer(buffer);
     let anchor = null;

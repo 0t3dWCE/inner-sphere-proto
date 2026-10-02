@@ -326,6 +326,7 @@ export function updateCaravan() {
   for (const h of cv.herders) {
     // 'out' и 'dead' ставит npc.js; здесь только те, кто ещё при караване
     if (h.st && h.st !== 'in') continue;
+    if (h.acting) continue;
     h.group.visible = true;
     const wander = Math.sin(t * h.wanderW + h.phase) * h.wanderAmp;            // м, вдоль каравана
     const wanderV = Math.cos(t * h.wanderW + h.phase) * h.wanderAmp * h.wanderW; // м/с относительно каравана

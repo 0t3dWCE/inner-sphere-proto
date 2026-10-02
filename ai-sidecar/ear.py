@@ -1,13 +1,16 @@
 """Whisper large-v3-turbo, один процесс whisper-server на Metal."""
 
 import json
+import math
 import os
 import signal
 import socket
+import struct
 import subprocess
 import time
 import urllib.error
 import urllib.request
+import wave
 
 
 class Ear:
@@ -47,6 +50,9 @@ class Ear:
         if os.path.getsize(wav_path) < 1000:
             print("слух: запись слишком короткая", flush=True)
             return ""
+        if _silent(wav_path):
+            print("слух: в записи тишина", flush=True)
+            return ""
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/inference",
             data=_multipart({"file": wav_path, "response_format": "json", "language": "ru", "temperature": "0"}),
@@ -77,6 +83,23 @@ class Ear:
             except subprocess.TimeoutExpired:
                 os.killpg(self.proc.pid, signal.SIGKILL)
         self._log.close()
+
+
+def _silent(path: str) -> bool:
+    """Пик ниже разговорной речи: Whisper на такой записи выдумывает «Продолжение следует»."""
+    try:
+        with wave.open(path) as w:
+            raw = w.readframes(w.getnframes())
+            width = w.getsampwidth()
+    except (wave.Error, OSError):
+        return False
+    if width != 2 or len(raw) < 2:
+        return False
+    count = len(raw) // 2
+    samples = struct.unpack("<" + "h" * count, raw)
+    peak = max(abs(s) for s in samples)
+    rms = math.sqrt(sum(s * s for s in samples) / count)
+    return peak < 1500 or rms < 200
 
 
 def _port_open(port: int) -> bool:

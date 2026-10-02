@@ -53,14 +53,20 @@ function refreshPanelLock() {
 refreshPanelLock();
 
 export function setParam(key, value) {
-  if (ROOM && NET_LOCKED.has(key)) return;
-  if (ROOM && NET_SHARED.has(key) && !isOwner()) return;
+  const spec = SCHEMA.find(s => s[0] === key);
+  if (!spec || !Number.isFinite(+value)) return false;
+  if (ROOM && NET_LOCKED.has(key)) return false;
+  if (ROOM && NET_SHARED.has(key) && !isOwner()) return false;
+  const [, , min, max] = spec;
+  value = THREE.MathUtils.clamp(+value, min, max);
   if (key === 'EYE') value = Math.min(value, P.R / 2);   // глаза не выше центра сферы
   P[key] = value;
+  if (inputs[key]) inputs[key].value = P[key];
   if (key === 'R') { P.EYE = Math.min(P.EYE, P.R / 2); inputs.EYE.value = P.EYE; applyRadius(); }
   if (key === 'TERRAIN_H') applyRadius();   // рельеф зашит в геометрию и позиции объектов
   saveParams();
   if (ROOM && NET_SHARED.has(key)) publishRoomParams();
+  return true;
 }
 function syncInputs() { for (const k in inputs) inputs[k].value = P[k]; }
 onRoomChange(() => { syncInputs(); refreshPanelLock(); });

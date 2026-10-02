@@ -41,7 +41,7 @@ class Brain:
                 "stream": False,
                 "think": False,
                 "keep_alive": -1,
-                "options": {"num_ctx": 4096, "temperature": 0.2, "num_predict": 120},
+                "options": {"num_ctx": 4096, "temperature": 0.2, "num_predict": 800},
             }
             if tools:
                 payload["tools"] = tools
@@ -96,7 +96,7 @@ class Brain:
 
 def _plain_line(text: str) -> bool:
     """Qwen 3.5 иногда отвечает самой фразой, без вызова say."""
-    if not text or "\n" in text or len(text) > 200:
+    if not text or len(" ".join(text.split())) > 1000:
         return False
     return re.match(r"^(say|go|emote)\b", text, re.IGNORECASE) is None
 
